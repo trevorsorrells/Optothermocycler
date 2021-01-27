@@ -795,7 +795,7 @@ class OptoThermoExp:
                     outFile.write('\n')
             # print(output_parameters [:30])
 
-    def output_tSNE(self, window_size_seconds, perplex=30):
+    def output_tSNE(self, window_size_seconds, perplex=30, delete=False):
         #this method reads in files with features calculated over windows and outputs the tSNE axes into the file
         window_data = []
         window_array = []
@@ -805,25 +805,32 @@ class OptoThermoExp:
             with open(self.opto_folder + '/cluster_features/'+trial_name +'_' + str(window_size_seconds) + '.txt', 'r') as inFile:
                 all_lines = inFile.readlines()
                 line1 = all_lines[0].split()
-                cn=-1 
-                end=-1
-                while line1[cn][:4] =='tSNE': 
-                    if br==True:
-                        break
+                if br==False:
+                    cn=-1 
+                    end=-1
+                while line1[cn][:4] =='tSNE' and br == False: 
                     if line1[cn].split('_')[-1] == str(perplex): #test if have run tSNE with same perplexity
-                        rp=input('t-SNE run with the same perplexity exists, do you want to overwrite it(y/n or q to quit):')
-                        while rp != 'y' and rp != 'n':
-                            if rp == 'q':
+                        text1='t-SNE run with the same perplexity exists, do you want to overwrite it(y/n or q to quit):'
+                        text2='Found the t-SNE run you specified, do you want to delete it(y/n):'
+                        if delete == False:
+                            text=text1
+                        else: 
+                            text=text2
+                        inp=input(text)
+                        while inp != 'y' and inp != 'n':
+                            if inp == 'q':
                                 quit()
-                            rp=input('t-SNE run with the same perplexity exists, do you want to overwrite it(y/n or q to quit):')
-                        if rp == 'y':
-                            end = cn-1 #don't include past tSNE output if present in the file
+                            inp=input(text)
+                        if inp == 'y':
+                            end=cn-1 #don't include past tSNE output if present in the file
                             br=True
-                    if br==True:
+                        if inp == 'n':
+                            end=-1
+                            br=True
                         break
                     cn+=-2
                 for line in all_lines[1:]:
-                    if end == -1 or rp == 'n':
+                    if end == -1: #or inp == 'n':
                         window_data[t].append(line.split()[:])
                         window_array.append(line.split()[:])
                     elif end == -2:
@@ -833,25 +840,29 @@ class OptoThermoExp:
                         window_data[t].append(line.split()[:end]+line.split()[end+2:])
                         window_array.append(line.split()[:end]+line.split()[end+2:])
         window_array = np.asarray(window_array)
-        print(np.shape(window_array))
-        time_start = time.time()
-        behavior_tsne = TSNE(perplexity=perplex).fit_transform(window_array[:,3:])
-        print('t-SNE done! Time elapsed: {} seconds'.format(time.time()-time_start))
+        if delete == False:
+            print(np.shape(window_array))
+            time_start = time.time()
+            behavior_tsne = TSNE(perplexity=perplex).fit_transform(window_array[:,3:])
+            print('t-SNE done! Time elapsed: {} seconds'.format(time.time()-time_start))
         i = 0
         for t, trial_name in zip(range(len(self.behavior_data)), self.trial_names):
             with open(self.opto_folder + '/cluster_features/'+trial_name +'_' + str(window_size_seconds) + '.txt', 'w') as outFile:
-                if end == -1 or rp == 'n':
+                if end == -1 or inp == 'n':
                     outFile.write('\t'.join(line1[:]))
                 elif end == -2:
                     outFile.write('\t'.join(line1[:end]))
                 else:
                     outFile.write('\t'.join(line1[:end]+line1[end+2:]))
-                outFile.write('\ttSNE1_'+str(window_size_seconds)+'s_'+str(perplex)+'per\ttSNE2_'+str(window_size_seconds)+'s_'+str(perplex)+'\n')
+                if delete == False:
+                    outFile.write('\ttSNE1_'+str(window_size_seconds)+'s_'+str(perplex)+'per\ttSNE2_'+str(window_size_seconds)+'s_'+str(perplex)+'\n')
                 for window in window_data[t]:
                     outFile.write('\t'.join(map(str, window)))
-                    outFile.write('\t'+str(behavior_tsne[i,0])+'\t'+str(behavior_tsne[i,1]) + '\n')
+                    if delete == False:
+                        outFile.write('\t'+str(behavior_tsne[i,0])+'\t'+str(behavior_tsne[i,1]) + '\n')
+                    else:
+                        outFile.write('\t\n')
                     i += 1
-                
         
     def graph_tSNE(self, experiment_name, window_size_seconds, perplex, sample_size = 1000, dom_behav_graph=True, behav_gradient=True, other_gradient=True, any_behav=True):
         newpath = self.opto_folder + '/graphs/tSNE/' + experiment_name +'/'
@@ -1178,10 +1189,11 @@ class OptoThermoExp:
                 plt.xlabel(labels)
                 plt.savefig(newpath + '/cats_' + name + '.pdf', format='pdf')        
                 
-    def annotate_videos(self, output_name, trial_name):            
-
+    def annotate_videos(self, project_folder, trial_name, experiment_name, window_size_seconds, stimulus_onsets, stimulus_names, prepost_seconds, category_info, ethogram=True, category_linegraph=True, category_graphs=True):        
+        self.project_folder=project_folder
         #read in xy locations
-        velocity_mat = loadmat(os.path.join(self.opto_folder, 'processed', self.trial_names[t], 'trx.mat'))
+        self.trial_name=trial_name
+        velocity_mat = loadmat(os.path.join(self.opto_folder, 'processed', self.trial_name, 'trx.mat'))
         # print(type(velocity_mat))
         # print(velocity_mat.keys())
         # print(type(velocity_mat['trx']))
@@ -1204,24 +1216,24 @@ class OptoThermoExp:
                         xys[w,f,1] = yloc
                 f += 1
                 
-
         frame_size = (700,1180)
-        outcommand = generateOutCommand(output_name) #trial1_annotated
+        outcommand = generateOutCommand('movie',frame_size) #trial1_annotated
         print(' '.join(outcommand))
         pipeout = sp.Popen(outcommand, stdin=sp.PIPE)#, stderr=sp.PIPE)
         #read in tSNE information here
         #This looks for videos in the project_folder/trial_name, but it will need to be changed to looking in project_folder/processed
-        for root, dirs, files in os.walk(project_folder, processed):
-                avi_files = [f for f in files if f[-3:] == 'avi' and f[0] != '.']
-                avi_files = sorted(avi_files)
-                print(avi_files)
-                #find the avi_files that correspond to the trial you are annotating
-                for i in range(len(avi_files)):
+        for root, dirs, files in os.walk('project_folder/processed/'+trial_name):
+                #print(root,dirs,files)
+                mp4_files = [f for f in files if f[-3:] == 'mp4' and f[0] != '.']
+                mp4_files = sorted(mp4_files)
+                print(mp4_files)
+                #find the mp4_files that correspond to the trial you are annotating
+                for i in range(len(mp4_files)):
                     # if i > 0: 
                     #     break
                     t1 = time.time()
                     incommand = [ 'ffmpeg',
-                            '-i', os.path.join(trial_name, avi_files[i]),
+                            '-i', os.path.join(trial_name, mp4_files[i]),
                             '-f', 'image2pipe',
                             '-pix_fmt', 'gray',
                             '-vcodec', 'rawvideo', '-'] 
@@ -1238,7 +1250,16 @@ class OptoThermoExp:
                         frame = image.reshape(frame_size)
                         plt.figure()
                         plt.imshow(frame)
-                        #something like: plt.txt(x,y, tSNE_category_color)
+                        #something like: plt.txt(x,y, tSNE_category_color)                                    
+                        frame_number=1
+                        for w, well in enumerate(wells):
+                            fr=frame_number
+                            for c, category in enumerate(category_info):
+                                if point_inside_polygon(xys[w,fr,0],xys[w,fr,1],category[2]):
+                                    tSNE_category_name=category[0]
+                                else:
+                                    tSNE_category_name=''
+                            plt.text(xys[w,fr,0],xys[w,fr,1],tSNE_category_name)
                         plt.show()
         #plot clusters onto frame
         #I’m not sure if you can directly write the matplotlib to video?
@@ -1256,12 +1277,12 @@ class OptoThermoExp:
                     with open(os.path.join(project_folder,trial_name,'ffmpeg_bkg_errors.txt'),'w') as outFile:
                         outFile.write(err)
                 
-def generateOutCommand(file_name):
+def generateOutCommand(file_name,frame_size):
         return [ 'ffmpeg',
             '-y', # (optional) overwrite output file if it exists
             '-f', 'rawvideo',
             '-loglevel','error',
-            '-s', str(frame_size[1]) + 'x' + str(frame_size[0]), # size of one frame
+            '-s', str(frame_size[0]) + 'x' + str(frame_size[1]), # size of one frame
             '-pix_fmt', 'gray',
             '-r', '30', # frames per second
             '-i', '-', # The imput comes from a pipe
