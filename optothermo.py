@@ -30,7 +30,7 @@ from sklearn.manifold import TSNE
 import time
 velocity_step_ctrax = 200 #in milliseconds
 window_step_size = 10 #in seconds
-
+import subprocess as sp
 
 class OptoThermoExp:
     def __init__(self, trial_list, opto_folder, behaviors, behavior_colors, frame_rate, velocity_step_frames):
@@ -748,7 +748,7 @@ class OptoThermoExp:
                             if current_parameters[5] >= 0.2: #probing
                                 dominant_behavior = 3
                             if current_parameters[6] >= 0.04: #flying
-                                dominant_behavior = 4
+                                dominant_behavior = 4            
                             new_current_parameters = current_parameters[:2]
                             new_current_parameters.append(dominant_behavior)
                             new_current_parameters.extend(current_parameters[2:])
@@ -780,6 +780,8 @@ class OptoThermoExp:
                                         current_parameters.append(tr/bouts)
                                 all_bouts.append(bouts)
                             current_parameters.extend(all_bouts)
+                            if current_parameters[8] == 1.0 or current_parameters[2] == 0:
+                                continue
                             output_parameters.append(current_parameters)
             with open(newpath + self.trial_names[t] +'_' + str(window_size_seconds) + '.txt', 'w') as outFile:
                 outFile.write('mosquito\tframe\tdom_behav\tmean_vel\t')
@@ -793,37 +795,74 @@ class OptoThermoExp:
                     outFile.write('\n')
             # print(output_parameters [:30])
 
-    def output_tSNE(self, window_size_seconds, perplex=30):
+    def output_tSNE(self, window_size_seconds, perplex=30, delete=False):
         #this method reads in files with features calculated over windows and outputs the tSNE axes into the file
         window_data = []
         window_array = []
+        br=False
         for t, trial_name in zip(range(len(self.behavior_data)), self.trial_names):
             window_data.append([])
             with open(self.opto_folder + '/cluster_features/'+trial_name +'_' + str(window_size_seconds) + '.txt', 'r') as inFile:
                 all_lines = inFile.readlines()
                 line1 = all_lines[0].split()
-                if line1[-1][:4] =='tSNE':
-                    end = -3 #don't include past tSNE output if present in the file
-                else:
-                    end = -1
+                if br==False:
+                    cn=-1 
+                    end=-1
+                while line1[cn][:4] =='tSNE' and br == False: 
+                    if line1[cn].split('_')[-1] == str(perplex): #test if have run tSNE with same perplexity
+                        text1='t-SNE run with the same perplexity exists, do you want to overwrite it(y/n or q to quit):'
+                        text2='Found the t-SNE run you specified, do you want to delete it(y/n):'
+                        if delete == False:
+                            text=text1
+                        else: 
+                            text=text2
+                        inp=input(text)
+                        while inp != 'y' and inp != 'n':
+                            if inp == 'q':
+                                quit()
+                            inp=input(text)
+                        if inp == 'y':
+                            end=cn-1 #don't include past tSNE output if present in the file
+                            br=True
+                        if inp == 'n':
+                            end=-1
+                            br=True
+                        break
+                    cn+=-2
                 for line in all_lines[1:]:
-                    window_data[t].append(line.split()[:end])
-                    window_array.append(line.split()[:end])
+                    if end == -1: #or inp == 'n':
+                        window_data[t].append(line.split()[:])
+                        window_array.append(line.split()[:])
+                    elif end == -2:
+                        window_data[t].append(line.split()[:end])
+                        window_array.append(line.split()[:end])
+                    else:
+                        window_data[t].append(line.split()[:end]+line.split()[end+2:])
+                        window_array.append(line.split()[:end]+line.split()[end+2:])
         window_array = np.asarray(window_array)
-        print(np.shape(window_array))
-        time_start = time.time()
-        behavior_tsne = TSNE(perplexity=perplex).fit_transform(window_array[:,3:])
-        print('t-SNE done! Time elapsed: {} seconds'.format(time.time()-time_start))
+        if delete == False:
+            print(np.shape(window_array))
+            time_start = time.time()
+            behavior_tsne = TSNE(perplexity=perplex).fit_transform(window_array[:,3:])
+            print('t-SNE done! Time elapsed: {} seconds'.format(time.time()-time_start))
         i = 0
         for t, trial_name in zip(range(len(self.behavior_data)), self.trial_names):
             with open(self.opto_folder + '/cluster_features/'+trial_name +'_' + str(window_size_seconds) + '.txt', 'w') as outFile:
-                outFile.write('\t'.join(line1[:end]))
-                outFile.write('\ttSNE1_'+str(window_size_seconds)+'s_'+str(perplex)+'per\ttSNE2_'+str(window_size_seconds)+'s_'+str(perplex)+'\n')
+                if end == -1 or inp == 'n':
+                    outFile.write('\t'.join(line1[:]))
+                elif end == -2:
+                    outFile.write('\t'.join(line1[:end]))
+                else:
+                    outFile.write('\t'.join(line1[:end]+line1[end+2:]))
+                if delete == False:
+                    outFile.write('\ttSNE1_'+str(window_size_seconds)+'s_'+str(perplex)+'per\ttSNE2_'+str(window_size_seconds)+'s_'+str(perplex)+'\n')
                 for window in window_data[t]:
                     outFile.write('\t'.join(map(str, window)))
-                    outFile.write('\t'+str(behavior_tsne[i,0])+'\t'+str(behavior_tsne[i,1]) + '\n')
+                    if delete == False:
+                        outFile.write('\t'+str(behavior_tsne[i,0])+'\t'+str(behavior_tsne[i,1]) + '\n')
+                    else:
+                        outFile.write('\t\n')
                     i += 1
-                
         
     def graph_tSNE(self, experiment_name, window_size_seconds, perplex, sample_size = 1000, dom_behav_graph=True, behav_gradient=True, other_gradient=True, any_behav=True):
         newpath = self.opto_folder + '/graphs/tSNE/' + experiment_name +'/'
@@ -835,8 +874,19 @@ class OptoThermoExp:
             with open(self.opto_folder + '/cluster_features/'+trial_name +'_' + str(window_size_seconds) + '.txt', 'r') as inFile:
                 all_lines = inFile.readlines()
                 line1 = all_lines[0].split()
-                if line1[-1][:4] !='tSNE':
+                cn=-1 
+                end=-1
+                if line1[-1][:4] != 'tSNE':
                     print('tSNE not calculated for this trial!')
+                while line1[cn][:4] =='tSNE':                        
+                    if line1[cn].split('_')[-1] == str(perplex): 
+                        x=cn-1
+                        y=cn   
+                        end = cn-1 
+                        break
+                    cn+=-2
+                if end == -1:
+                    print('tSNE not calculated for this perplexity!')                
                 for line in all_lines[1:]:
                     window_array.append(line.split())
         window_array = np.asarray(window_array, dtype=float)
@@ -851,11 +901,25 @@ class OptoThermoExp:
         if dom_behav_graph:
             plt.figure()
             cols = []
-            behav_cols = ['#EEEEEE','#C0BA9C','#863810','#FA0F0C','#78C0A7']
-            for i in window_array[:,2].astype(int):
+            behav_cols = ['#EEEEEE','#C0BA9C','#863810','#FA0F0C','#78C0A7','#FFFFFF']
+            for i in window_array[:,2].astype(int):              
                 cols.append(behav_cols[i])
-            plt.scatter(window_array[:,-2][subset_mask],window_array[:,-1][subset_mask], marker='.', linewidths=0.0, c=np.array(cols)[subset_mask])
+            fig, ax = plt.subplots()            
+            ax.scatter(window_array[:,x][subset_mask],window_array[:,y][subset_mask], marker='.', linewidths=0.0, c=np.array(cols)[subset_mask])
             # plt.colorbar(label='Average velocity')
+            plt.title('Dominant Behavior(perp='+line1[cn].split('_')[-1]+')')
+            plt.xlabel('tSNE1')
+            plt.ylabel('tSNE2')
+            #plt.yticks(np.arange(min(window_array[:,-1]),max(window_array[:,-1]),5))      
+            #start, end = ax.get_xlim() 
+            ss = 10 #set step size for x,y axis ticks
+            start_x = roundup(int(ax.get_xlim()[0]))
+            end_x = roundup(int(ax.get_xlim()[1]))
+            ax.xaxis.set_ticks(np.arange(start_x, end_x, ss))
+            start_y = roundup(int(ax.get_ylim()[0]))
+            end_y = roundup(int(ax.get_ylim()[1]))
+            ax.yaxis.set_ticks(np.arange(start_y, end_y, ss))
+            plt.grid(alpha=0.35, linestyle='dashed', linewidth=0.5)
             plt.savefig(self.opto_folder + '/graphs/tSNE/' + experiment_name + '/dombehav_' + str(window_size_seconds) + 'sec_' + str(perplex) + 'per.pdf', format='pdf')
             plt.close()
         behavior_none_names = self.behaviors
@@ -872,7 +936,7 @@ class OptoThermoExp:
                 vals[:, 1] = np.linspace(238/256, behav_cols_rgb[b][1]/256, N)
                 vals[:, 2] = np.linspace(238/256, behav_cols_rgb[b][2]/256, N)
                 newcmp = matplotlib.colors.ListedColormap(vals)
-                plt.scatter(window_array[:,-2][subset_mask],window_array[:,-1][subset_mask], marker='.', linewidths=0.0, c=window_array[:,b+4][subset_mask], cmap=newcmp)
+                plt.scatter(window_array[:,x][subset_mask],window_array[:,y][subset_mask], marker='.', linewidths=0.0, c=window_array[:,b+4][subset_mask], cmap=newcmp)
                 plt.colorbar(label='Proportion ' + behavior)
                 plt.savefig(self.opto_folder + '/graphs/tSNE/' + experiment_name + '/grad' + behavior + '_' + str(window_size_seconds) + 'sec_' + str(perplex) + 'per.pdf', format='pdf')
                 plt.close()
@@ -887,29 +951,29 @@ class OptoThermoExp:
                 vals[:, 1] = np.linspace(238/256, behav_cols_rgb[b][1]/256, N)
                 vals[:, 2] = np.linspace(238/256, behav_cols_rgb[b][2]/256, N)
                 newcmp = matplotlib.colors.ListedColormap(vals)
-                plt.scatter(window_array[:,-2][subset_mask].astype(np.float),window_array[:,-1][subset_mask].astype(np.float), marker='.', linewidths=0.0, c=window_array[:,b+9][subset_mask], cmap=newcmp)
+                plt.scatter(window_array[:,x][subset_mask].astype(np.float),window_array[:,y][subset_mask].astype(np.float), marker='.', linewidths=0.0, c=window_array[:,b+9][subset_mask], cmap=newcmp)
                 plt.colorbar(label='Proportion ' + behavior)
                 plt.savefig(opto_folder + '/graphs/tSNE/' + experiment_name + '/grad' + behavior + '_' + str(window_size_seconds) + 'sec_' + str(perplex) + 'per.pdf', format='pdf')
                 plt.close()    
         if other_gradient:
             plt.figure()
             print(window_array[:,3])
-            plt.scatter(window_array[:,-2][subset_mask],window_array[:,-1][subset_mask], marker='.', linewidths=0.0, c=window_array[:,3][subset_mask], cmap=plt.get_cmap('BuPu'))
+            plt.scatter(window_array[:,x][subset_mask],window_array[:,y][subset_mask], marker='.', linewidths=0.0, c=window_array[:,3][subset_mask], cmap=plt.get_cmap('BuPu'))
             plt.colorbar(label='Average velocity')
             plt.savefig(opto_folder + '/graphs/tSNE/' + experiment_name + '/vel_' + str(window_size_seconds) + 'sec_' + str(perplex) + 'per.pdf', format='pdf')
             plt.close()    
             plt.figure()
-            plt.scatter(window_array[:,-2][subset_mask],window_array[:,-1][subset_mask], marker='.', linewidths=0.0, c=window_array[:,14][subset_mask], cmap=plt.get_cmap('BuPu'))
+            plt.scatter(window_array[:,x][subset_mask],window_array[:,y][subset_mask], marker='.', linewidths=0.0, c=window_array[:,14][subset_mask], cmap=plt.get_cmap('BuPu'))
             plt.colorbar(label='Average probing velocity')
             plt.savefig(opto_folder + '/graphs/tSNE/' + experiment_name + '/velprobe_' + str(window_size_seconds) + 'sec_' + str(perplex) + 'per.pdf', format='pdf')
             plt.close()  
             plt.figure()
-            plt.scatter(window_array[:,-2][subset_mask],window_array[:,-1][subset_mask], marker='.', linewidths=0.0, c=window_array[:,13][subset_mask], cmap=plt.get_cmap('BuPu'))
+            plt.scatter(window_array[:,x][subset_mask],window_array[:,y][subset_mask], marker='.', linewidths=0.0, c=window_array[:,13][subset_mask], cmap=plt.get_cmap('BuPu'))
             plt.colorbar(label='Average probing velocity')
             plt.savefig(opto_folder + '/graphs/tSNE/' + experiment_name + '/velwalk_' + str(window_size_seconds) + 'sec_' + str(perplex) + 'per.pdf', format='pdf')
             plt.close()    
             plt.figure()
-            plt.scatter(window_array[:,-2][subset_mask],window_array[:,-1][subset_mask], marker='.', linewidths=0.0, c=window_array[:,1][subset_mask], cmap=plt.get_cmap('hsv'))
+            plt.scatter(window_array[:,x][subset_mask],window_array[:,y][subset_mask], marker='.', linewidths=0.0, c=window_array[:,1][subset_mask], cmap=plt.get_cmap('hsv'))
             plt.colorbar(label='Frame number')
             plt.savefig(opto_folder + '/graphs/tSNE/' + experiment_name + '/time_' + str(window_size_seconds) + 'sec_' + str(perplex) + 'per.pdf', format='pdf')
             plt.close()
@@ -919,7 +983,7 @@ class OptoThermoExp:
                 cols = []
                 for i in window_array[:,2].astype(int):
                     cols.append(behavior_none_colors[i])
-                plt.scatter(window_array[:,-2][subset_mask],window_array[:,-1][subset_mask], marker='.', linewidths=0.0, c='#999999')
+                plt.scatter(window_array[:,x][subset_mask],window_array[:,y][subset_mask], marker='.', linewidths=0.0, c='#999999')
                 behave_mask = (window_array[:,b+4].astype(float) > 0)
                 plt.scatter(window_array[:,-2][behave_mask & subset_mask],window_array[:,-1][behave_mask & subset_mask], marker='.', linewidths=0.0, c=behavior_none_colors[b])
                 # plt.colorbar(label='Average velocity')
@@ -1124,7 +1188,117 @@ class OptoThermoExp:
                     patch.set_color(color)
                 plt.xlabel(labels)
                 plt.savefig(newpath + '/cats_' + name + '.pdf', format='pdf')        
-
+                
+    def annotate_videos(self, project_folder, trial_name, experiment_name, window_size_seconds, stimulus_onsets, stimulus_names, prepost_seconds, category_info, ethogram=True, category_linegraph=True, category_graphs=True):        
+        self.project_folder=project_folder
+        #read in xy locations
+        self.trial_name=trial_name
+        velocity_mat = loadmat(os.path.join(self.opto_folder, 'processed', self.trial_name, 'trx.mat'))
+        # print(type(velocity_mat))
+        # print(velocity_mat.keys())
+        # print(type(velocity_mat['trx']))
+        # print(len(velocity_mat['trx']))
+        # print(type(velocity_mat['trx'][0]))
+        # print(vars(velocity_mat['trx'][0]))
+        # print(type(velocity_mat['trx'][0].x))
+        # print(np.size(velocity_mat['trx'][0].x))
+        #first assign xy values to wells
+        plate_corners = [[20,20],[1066,16],[1065,690],[20,689]]
+        plate_rows, plate_cols = 3,5
+        wells = calculate_grid(plate_corners, plate_rows, plate_cols)
+        xys = np.empty((len(wells), len(velocity_mat['timestamps']), 2))
+        for track in velocity_mat['trx']:
+            f = track.firstframe - 1
+            for xloc, yloc in zip(track.x, track.y):
+                for w, well in enumerate(wells):
+                    if xloc > well[0] and xloc < well[1] and yloc > well[2] and yloc < well[3]:
+                        xys[w,f,0] = xloc
+                        xys[w,f,1] = yloc
+                f += 1
+                
+        frame_size = (700,1180)
+        outcommand = generateOutCommand('movie',frame_size) #trial1_annotated
+        print(' '.join(outcommand))
+        pipeout = sp.Popen(outcommand, stdin=sp.PIPE)#, stderr=sp.PIPE)
+        #read in tSNE information here
+        #This looks for videos in the project_folder/trial_name, but it will need to be changed to looking in project_folder/processed
+        for root, dirs, files in os.walk('project_folder/processed/'+trial_name):
+                #print(root,dirs,files)
+                mp4_files = [f for f in files if f[-3:] == 'mp4' and f[0] != '.']
+                mp4_files = sorted(mp4_files)
+                print(mp4_files)
+                #find the mp4_files that correspond to the trial you are annotating
+                for i in range(len(mp4_files)):
+                    # if i > 0: 
+                    #     break
+                    t1 = time.time()
+                    incommand = [ 'ffmpeg',
+                            '-i', os.path.join(trial_name, mp4_files[i]),
+                            '-f', 'image2pipe',
+                            '-pix_fmt', 'gray',
+                            '-vcodec', 'rawvideo', '-'] 
+                    pipein = sp.Popen(incommand, stdout = sp.PIPE, bufsize=10**8)
+                    f=0
+                    while f < 1: #True:
+                        raw_image = pipein.stdout.read(frame_size[0]*frame_size[1])
+                        image =  np.frombuffer(raw_image, dtype='uint8')
+                        if np.size(image) < frame_size[0]*frame_size[1]:
+                            print(np.size(image))
+                            pipein.stdout.flush()
+                            break
+                        f += 1
+                        frame = image.reshape(frame_size)
+                        plt.figure()
+                        plt.imshow(frame)
+                        #something like: plt.txt(x,y, tSNE_category_color)                                    
+                        frame_number=1
+                        for w, well in enumerate(wells):
+                            fr=frame_number
+                            for c, category in enumerate(category_info):
+                                if point_inside_polygon(xys[w,fr,0],xys[w,fr,1],category[2]):
+                                    tSNE_category_name=category[0]
+                                else:
+                                    tSNE_category_name=''
+                            plt.text(xys[w,fr,0],xys[w,fr,1],tSNE_category_name)
+                        plt.show()
+        #plot clusters onto frame
+        #I’m not sure if you can directly write the matplotlib to video?
+                        pipeout.stdin.write(frame.tostring())
+                        frame_number += 1
+                        pipein.stdout.flush()
+                    pipein.stdout.close()
+                    print(f, ' frames processed in ',time.time()-t1,' seconds')
+                out, err = pipeout.communicate()
+                if err != None:
+                    with open(os.path.join(project_folder,trial_name,'ffmpeg_errors.txt'),'w') as outFile:
+                        outFile.write(err)
+                out, err = bkgout.communicate()
+                if err != None:
+                    with open(os.path.join(project_folder,trial_name,'ffmpeg_bkg_errors.txt'),'w') as outFile:
+                        outFile.write(err)
+                
+def generateOutCommand(file_name,frame_size):
+        return [ 'ffmpeg',
+            '-y', # (optional) overwrite output file if it exists
+            '-f', 'rawvideo',
+            '-loglevel','error',
+            '-s', str(frame_size[0]) + 'x' + str(frame_size[1]), # size of one frame
+            '-pix_fmt', 'gray',
+            '-r', '30', # frames per second
+            '-i', '-', # The imput comes from a pipe
+            '-an', # Tells FFMPEG not to expect any audio
+            # '-b:v', '10000k', #this gives constant bitrate but not necessarily the highest quality?
+            '-q:v', '1', #this gives 1 (max) to 31 (lowest) variable quality bitrate: maybe best for my purposes
+            '-vcodec', 'mpeg4', #rawvideo works with fiji, mpeg4 compatible with jaaba?
+            'processed/' + file_name + '.mp4'
+            # ' > /dev/null 2>&1 < /dev/null' #this doesn't seem necessary and was part of troubleshooting
+            ]
+    
+def roundup(x, n=10):
+    res = math.ceil(x/n)*n
+    if (x%n < n/2)and (x%n>0):
+        res-=n
+    return res
 
 def point_inside_polygon(x,y,poly):
     #tests if point x,y is inside polygon [[x1,y1],[x2,y2]...], including right margin
