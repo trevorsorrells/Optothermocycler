@@ -13,6 +13,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.pylab as pl
 import matplotlib
+import ffmpeg
+import colorcet as cc
 # from matplotlib.patches import Polygon
 
 from statistics import median
@@ -660,6 +662,7 @@ class OptoThermoExp:
                         [behavior_list.append(0) for x in range(end_frame - behavior_offsets[-1])]
                     behavior_hist[m].append(behavior_list)
             #calculate and assign velocity
+            #print(self.trial_names[t])           
             velocity_mat = loadmat(os.path.join(self.opto_folder, 'processed', self.trial_names[t], 'trx.mat'))
             # print(type(velocity_mat))
             # print(velocity_mat.keys())
@@ -973,7 +976,7 @@ class OptoThermoExp:
             plt.savefig(opto_folder + '/graphs/tSNE/' + experiment_name + '/velwalk_' + str(window_size_seconds) + 'sec_' + str(perplex) + 'per.pdf', format='pdf')
             plt.close()    
             plt.figure()
-            plt.scatter(window_array[:,x][subset_mask],window_array[:,y][subset_mask], marker='.', linewidths=0.0, c=window_array[:,1][subset_mask], cmap=plt.get_cmap('hsv'))
+            plt.scatter(window_array[:,x][subset_mask],window_array[:,y][subset_mask], marker='.', linewidths=0.0, c=window_array[:,1][subset_mask], cmap=plt.get_cmap('cet_CET_R3'))#'hsv'
             plt.colorbar(label='Frame number')
             plt.savefig(opto_folder + '/graphs/tSNE/' + experiment_name + '/time_' + str(window_size_seconds) + 'sec_' + str(perplex) + 'per.pdf', format='pdf')
             plt.close()
@@ -992,7 +995,7 @@ class OptoThermoExp:
                 
 
     
-    def category_tSNE(self, experiment_name, window_size_seconds, stimulus_onsets, stimulus_names, prepost_seconds, category_info, ethogram=True, category_linegraph=True, category_graphs=True):
+    def category_tSNE(self, experiment_name, window_size_seconds, perplex, stimulus_onsets, stimulus_names, prepost_seconds, category_info, ethogram=True, category_linegraph=True, timespent_graph=True, category_graphs=True):
         #category info consists of [name, color, [(x1, y1), (x2, y2),(x3, y3),...]] for each cluster of interest
         opto_folder=self.opto_folder
         velocity_step_frames=self.velocity_step_frames
@@ -1012,8 +1015,21 @@ class OptoThermoExp:
             with open(opto_folder + '/cluster_features/'+trial_name +'_' + str(window_size_seconds) + '.txt', 'r') as inFile:
                 all_lines = inFile.readlines()
                 line1 = all_lines[0].split()
+                # x=-2
+                # y=-1
+                cn=-1 
+                end=-1
                 if line1[-1][:4] !='tSNE':
                     print('tSNE not calculated for this trial!')
+                while line1[cn][:4] =='tSNE':                        
+                    if line1[cn].split('_')[-1] == str(perplex): 
+                        x=cn-1
+                        y=cn   
+                        end = cn-1 
+                        break
+                    cn+=-2
+                if end == -1:
+                    print('tSNE not calculated for this perplexity!')  
                 last_mosquito = -1
                 m = -1
                 for line in all_lines[1:]:
@@ -1023,7 +1039,6 @@ class OptoThermoExp:
                         window_data[t].append([])
                         last_mosquito = int(line_split[0])
                     window_data[t][m].append(line_split)
-        
         #differences between states
         windowcats = [[]]
         [windowcats.append([]) for category in category_info]
@@ -1061,8 +1076,7 @@ class OptoThermoExp:
                                 continue
                             for c, category in enumerate(category_info):
                                 #test if window is a member of the cluster of points in category
-                                #if float(window[-2]) > category[2][0] and  float(window[-2]) < category[2][1] and float(window[-1]) > category[2][2] and  float(window[-1]) < category[2][3] :
-                                if point_inside_polygon(float(window[-2]),float(window[-1]),category[2]):#[(category[2][0],category[2][1]),(category[2][2],category[2][3]),(category[2][4],category[2][5])]) 
+                                if point_inside_polygon(float(window[x]),float(window[y]),category[2]):#[(category[2][0],category[2][1]),(category[2][2],category[2][3]),(category[2][4],category[2][5])]) 
                                     windowcats[c+1].append(window)
                                     behavior_hist[c+1][global_m].append(1)
                                     behavior_hist[0][global_m].append(0)
@@ -1134,22 +1148,75 @@ class OptoThermoExp:
                 plt.figure()
                 plt.ylim(0,.5)
                 plt.xlim(-prepost_seconds[0], prepost_seconds[1])
+                print(-prepost_seconds[0],prepost_seconds[1])
                 x_axis = np.linspace(-prepost_seconds[0], prepost_seconds[1], int((prepost_seconds[0] + prepost_seconds[1])/step_size))
                 plt.title(stimulus_names[st])
+                print(len(x_axis))
                 for c in range(len(category_info)):
                     i = step_size
                     behavior_to_plot = []
                     for m in behavior_hist[c+1]:
-                        if len(m) >len(x_axis): 
+                        if len(m) >len(x_axis):
                             behavior_to_plot.append(m[:len(x_axis)])
                         else:
                             behavior_to_plot.append(m)
-                    list_to_array = np.asarray(behavior_to_plot)
-                    behavior_hist_array = np.nanmean(list_to_array, 0)
+                        #print(m)
+                    print('\n\n')
+                    #list_to_array = np.asarray(behavior_to_plot)
+                    behavior_hist_array=avgNestedLists(behavior_to_plot)
+                    # print(list_to_array)
+                    #behavior_hist_array = np.nanmean(list_to_array, 0)
+                    #print(behavior_hist_array)
                     plt.plot(x_axis, behavior_hist_array, color=category_info[c][1])
-                plt.title(stimulus_names[st])
                 plt.savefig(newpath + '/prop_category_' + str(st) + '.pdf', format='pdf')
                 plt.close('all')
+            
+            if timespent_graph:
+                timespent = np.zeros((len(stimulus_onsets), len(category_info)),dtype=int)
+                for t in range(len(self.behavior_data)):
+                    for i in stim_type[t]:
+                        start_frame = int(self.onsets[t][i] - prepost_seconds[0]*frame_rate/velocity_step_frames)
+                        end_frame = int(self.onsets[t][i] + prepost_seconds[1]*frame_rate/velocity_step_frames + 1)
+                        if t >0:
+                            print(t, i)
+                        # print('frames ',start_frame, end_frame, stimulus_names[st])
+                        for m in range(len(window_data[t])):
+                            [cat.append([]) for cat in behavior_hist]
+                            [cat.append([[],[]]) for cat in ethogram_data]
+                            last_window_cat = -1
+                            for window in window_data[t][m]:
+                                if int(window[1]) < start_frame or int(window[1]) > end_frame:
+                                    continue
+                                for c, category in enumerate(category_info):
+                                    #test if window is a member of the cluster of points in category
+                                    if point_inside_polygon(float(window[x]),float(window[y]),category[2]):
+                                        timespent[st,c]+=10
+                #labels = ['none']                
+                #colors = ['#EEEEEE']
+                labels = []
+                colors = []
+                for cat in category_info:
+                    colors.append(cat[1])
+                [labels.append(cat[0]) for cat in category_info]
+                current_data = []
+                for c, category in enumerate(category_info):
+                    current_data.append(timespent[st,c]) #
+                plt.figure()
+                fig, ax = plt.subplots()    
+                # violin_parts = plt.violinplot(current_data)#,linewidth=0)
+                # for col, pc in zip(colors, violin_parts['bodies']):
+                #     pc.set_facecolor(col)
+                # bplot = plt.boxplot(current_data, sym='')
+                # for patch, color in zip(bplot['boxes'], colors):
+                #     patch.set_color(color)
+                plt.plot(labels, current_data, color=category_info[c][1])
+                plt.xlabel(labels)
+                ss=100
+                start_y = 0
+                end_y = roundup(int(ax.get_ylim()[1]))+100
+                plt.ylim(start_y, end_y)
+                #ax.yaxis.set_ticks(np.arange(start_y, end_y, ss))
+                plt.savefig(newpath + '/timespent_' + str(st) + '.pdf', format='pdf')  
 
         if category_graphs:
             for c,cat in enumerate(windowcats):
@@ -1167,7 +1234,7 @@ class OptoThermoExp:
                     print('cat shape ',np.shape(cat))
                     current_data.append(cat[:,b+4])
                 plt.figure()
-                violin_parts = plt.violinplot(current_data,linewidth=0)
+                violin_parts = plt.violinplot(current_data)#,linewidth=0)
                 for col, pc in zip(colors, violin_parts['bodies']):
                     pc.set_facecolor(col)
                 bplot = plt.boxplot(current_data, sym='')
@@ -1187,95 +1254,118 @@ class OptoThermoExp:
                 for patch, color in zip(bplot['boxes'], colors):
                     patch.set_color(color)
                 plt.xlabel(labels)
-                plt.savefig(newpath + '/cats_' + name + '.pdf', format='pdf')        
+                plt.savefig(newpath + '/cats_' + name + '.pdf', format='pdf')
+            
                 
-    def annotate_videos(self, project_folder, trial_name, experiment_name, window_size_seconds, stimulus_onsets, stimulus_names, prepost_seconds, category_info, ethogram=True, category_linegraph=True, category_graphs=True):        
+    def annotate_videos(self, project_folder, trial_name, experiment_name, window_size_seconds, stimulus_onsets, stimulus_names, prepost_seconds, category_info, ethogram=True, category_linegraph=True, category_graphs=True, category_anno=False, behavior_anno=False):        
         self.project_folder=project_folder
         #read in xy locations
         self.trial_name=trial_name
         velocity_mat = loadmat(os.path.join(self.opto_folder, 'processed', self.trial_name, 'trx.mat'))
-        # print(type(velocity_mat))
-        # print(velocity_mat.keys())
-        # print(type(velocity_mat['trx']))
-        # print(len(velocity_mat['trx']))
-        # print(type(velocity_mat['trx'][0]))
-        # print(vars(velocity_mat['trx'][0]))
-        # print(type(velocity_mat['trx'][0].x))
-        # print(np.size(velocity_mat['trx'][0].x))
         #first assign xy values to wells
         plate_corners = [[20,20],[1066,16],[1065,690],[20,689]]
         plate_rows, plate_cols = 3,5
         wells = calculate_grid(plate_corners, plate_rows, plate_cols)
         xys = np.empty((len(wells), len(velocity_mat['timestamps']), 2))
-        for track in velocity_mat['trx']:
+        for track in velocity_mat['trx']: #get locations of each mosquito
             f = track.firstframe - 1
             for xloc, yloc in zip(track.x, track.y):
                 for w, well in enumerate(wells):
                     if xloc > well[0] and xloc < well[1] and yloc > well[2] and yloc < well[3]:
                         xys[w,f,0] = xloc
                         xys[w,f,1] = yloc
-                f += 1
-                
+                f += 1                
         frame_size = (700,1180)
         outcommand = generateOutCommand('movie',frame_size) #trial1_annotated
         print(' '.join(outcommand))
         pipeout = sp.Popen(outcommand, stdin=sp.PIPE)#, stderr=sp.PIPE)
         #read in tSNE information here
-        #This looks for videos in the project_folder/trial_name, but it will need to be changed to looking in project_folder/processed
-        for root, dirs, files in os.walk('project_folder/processed/'+trial_name):
-                #print(root,dirs,files)
-                mp4_files = [f for f in files if f[-3:] == 'mp4' and f[0] != '.']
-                mp4_files = sorted(mp4_files)
-                print(mp4_files)
-                #find the mp4_files that correspond to the trial you are annotating
-                for i in range(len(mp4_files)):
-                    # if i > 0: 
-                    #     break
-                    t1 = time.time()
-                    incommand = [ 'ffmpeg',
-                            '-i', os.path.join(trial_name, mp4_files[i]),
-                            '-f', 'image2pipe',
-                            '-pix_fmt', 'gray',
-                            '-vcodec', 'rawvideo', '-'] 
-                    pipein = sp.Popen(incommand, stdout = sp.PIPE, bufsize=10**8)
-                    f=0
-                    while f < 1: #True:
-                        raw_image = pipein.stdout.read(frame_size[0]*frame_size[1])
-                        image =  np.frombuffer(raw_image, dtype='uint8')
-                        if np.size(image) < frame_size[0]*frame_size[1]:
-                            print(np.size(image))
-                            pipein.stdout.flush()
-                            break
-                        f += 1
-                        frame = image.reshape(frame_size)
-                        plt.figure()
-                        plt.imshow(frame)
-                        #something like: plt.txt(x,y, tSNE_category_color)                                    
-                        frame_number=1
-                        for w, well in enumerate(wells):
-                            fr=frame_number
-                            for c, category in enumerate(category_info):
-                                if point_inside_polygon(xys[w,fr,0],xys[w,fr,1],category[2]):
-                                    tSNE_category_name=category[0]
-                                else:
-                                    tSNE_category_name=''
-                            plt.text(xys[w,fr,0],xys[w,fr,1],tSNE_category_name)
-                        plt.show()
-        #plot clusters onto frame
-        #I’m not sure if you can directly write the matplotlib to video?
-                        pipeout.stdin.write(frame.tostring())
-                        frame_number += 1
+        #This looks for videos in the project_folder/processed/trial_name
+        path=project_folder+'/processed/trial10_DP_heat'
+        for root, dirs, files in os.walk(path):
+            print(root,dirs,files)
+            mp4_files = [f for f in files if f[-3:] == 'mp4' and f[:5] == 'movie']
+            mp4_files = sorted(mp4_files)
+            print(mp4_files)
+            #find the mp4_files that correspond to the trial you are annotating
+            for i in range(len(mp4_files)):
+                # if i > 0: 
+                #     break
+                t1 = time.time()
+                incommand = [ 'ffmpeg',
+                        '-i', os.path.join(project_folder,'processed',trial_name, mp4_files[i]),
+                        '-f', 'image2pipe',
+                        '-pix_fmt', 'gray',
+                        '-vcodec', 'rawvideo', '-'] 
+                pipein = sp.Popen(incommand, stdout = sp.PIPE, bufsize=10**8)
+                #save behavior info to each frame
+                current_behavior = np.empty((len(wells), len(velocity_mat['timestamps'])), dtype=str)
+                for t in range(len(self.behavior_data)):
+                    allStarts = [item for sublist in self.behavior_data[t][self.behaviors[0]]['tStarts'] for item in sublist]
+                    start_frame = min(allStarts)
+                    allEnds = [item for sublist in self.behavior_data[t][self.behaviors[0]]['tEnds'] for item in sublist]
+                    end_frame = max(allEnds)
+                    for m in range(len(self.behavior_data[t][self.behaviors[0]]['t0s'])):
+                        for b, behavior_name in enumerate(self.behaviors):        
+                            temp_onsets = [x for x in self.behavior_data[t][behavior_name]['t0s'][m] if  x >= start_frame and x < end_frame]
+                            temp_offsets = [x for x in self.behavior_data[t][behavior_name]['t1s'][m] if  x >= start_frame and x < end_frame]
+                            behavior_onsets, behavior_offsets = fixBehaviorRange(sorted(temp_onsets), sorted(temp_offsets), start_frame, end_frame)
+                            for j in range(len(behavior_onsets)):
+                                for w in range(behavior_onsets[j],behavior_offsets[j]):
+                                    print(str(m)+'\t'+str(w))
+                                    current_behavior[m,w]=behavior_name
+                f0=18800
+                f=f0
+                while f < 20000: #True:
+                    raw_image = pipein.stdout.read(frame_size[0]*frame_size[1])
+                    image =  np.frombuffer(raw_image, dtype='uint8')
+                    if np.size(image) < frame_size[0]*frame_size[1]:
+                        print(np.size(image))
                         pipein.stdout.flush()
-                    pipein.stdout.close()
-                    print(f, ' frames processed in ',time.time()-t1,' seconds')
-                out, err = pipeout.communicate()
-                if err != None:
-                    with open(os.path.join(project_folder,trial_name,'ffmpeg_errors.txt'),'w') as outFile:
-                        outFile.write(err)
-                out, err = bkgout.communicate()
-                if err != None:
-                    with open(os.path.join(project_folder,trial_name,'ffmpeg_bkg_errors.txt'),'w') as outFile:
-                        outFile.write(err)
+                        break
+                    f += 1
+                    frame = image.reshape(frame_size)
+                    plt.figure#(figsize=(16.4,10))
+                    fig=plt.imshow(frame,cmap='gray')
+                    fig.axes.get_xaxis().set_visible(False)
+                    fig.axes.get_yaxis().set_visible(False)
+                    plt.subplots_adjust(top=0.9,bottom=0.01,right=0.98,left=0.02,hspace=0,wspace=0)
+                    plt.margins(0,0)
+                    plt.title('Frame='+str(f),fontsize=10)
+                    newpath=path+'/output/'
+                    if not os.path.exists(newpath):
+                        os.makedirs(newpath)                                
+                    for w, well in enumerate(wells):
+                        for c, category in enumerate(category_info):
+                            if point_inside_polygon(xys[w,f,0],xys[w,f,1],category[2]):
+                                tSNE_category_name=category[0]
+                                break
+                            else:
+                                tSNE_category_name='None'
+                        if category_anno == True:
+                            plt.text(xys[w,f,0],xys[w,f,1],tSNE_category_name,color='red',fontsize=10)#plot clusters onto frame                       
+                        if behavior_anno == True: #plot behaviors onto frame
+                            plt.text(xys[w,f,0],xys[w,f,1],current_behavior[w,f],color='red',fontsize=10)
+                    plt.savefig(newpath+'/frame%05d.png' %(f), dpi=200)#, bbox_inches='tight') #add pad_inches=0 to ged rid of white margin
+                    plt.clf()
+                    plt.close()
+                    #plt.show()
+                    pipeout.stdin.write(frame.tostring())
+                    pipein.stdout.flush()
+                os.chdir(newpath)
+                sp.call([
+                    'ffmpeg', '-framerate', '30', '-start_number', str(f0), '-i', 'frame%05d.png', '-r', '30', '-pix_fmt', 'yuv420p', '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+                    'output(18800-20000).mp4'
+                ])
+                # for file_name in glob.glob("*.png"): #to remove figure files after creating videos
+                #     os.remove(file_name)
+                pipein.stdout.close()
+                print(f, ' frames processed in ',time.time()-t1,' seconds')
+            out, err = pipeout.communicate()
+            if err != None:
+                with open(os.path.join(project_folder,trial_name,'ffmpeg_errors.txt'),'w') as outFile:
+                    outFile.write(err)
+           
                 
 def generateOutCommand(file_name,frame_size):
         return [ 'ffmpeg',
@@ -1293,6 +1383,23 @@ def generateOutCommand(file_name,frame_size):
             'processed/' + file_name + '.mp4'
             # ' > /dev/null 2>&1 < /dev/null' #this doesn't seem necessary and was part of troubleshooting
             ]
+def avgNestedLists(nested_vals):
+    """
+    Averages a 2-D array and returns a 1-D array of all of the columns
+    averaged together, regardless of their dimensions.
+    """
+    output = []
+    maximum = 0
+    for lst in nested_vals:
+        if len(lst) > maximum:
+            maximum = len(lst)
+    for index in range(maximum): # Go through each index of longest list
+        temp = []
+        for lst in nested_vals: # Go through each list
+            if index < len(lst): # If not an index error
+                temp.append(lst[index])
+        output.append(np.nanmean(temp))
+    return output
     
 def roundup(x, n=10):
     res = math.ceil(x/n)*n
