@@ -13,8 +13,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.pylab as pl
 import matplotlib
-import ffmpeg
-import colorcet as cc
 # from matplotlib.patches import Polygon
 
 from statistics import median
@@ -846,7 +844,7 @@ class OptoThermoExp:
         if delete == False:
             print(np.shape(window_array))
             time_start = time.time()
-            behavior_tsne = TSNE(perplexity=perplex).fit_transform(window_array[:,3:])
+            behavior_tsne = TSNE(perplexity=perplex, n_jobs=4, verbose=1).fit_transform(window_array[:,3:])
             print('t-SNE done! Time elapsed: {} seconds'.format(time.time()-time_start))
         i = 0
         for t, trial_name in zip(range(len(self.behavior_data)), self.trial_names):
@@ -976,7 +974,7 @@ class OptoThermoExp:
             plt.savefig(opto_folder + '/graphs/tSNE/' + experiment_name + '/velwalk_' + str(window_size_seconds) + 'sec_' + str(perplex) + 'per.pdf', format='pdf')
             plt.close()    
             plt.figure()
-            plt.scatter(window_array[:,x][subset_mask],window_array[:,y][subset_mask], marker='.', linewidths=0.0, c=window_array[:,1][subset_mask], cmap=plt.get_cmap('cet_CET_R3'))#'hsv'
+            plt.scatter(window_array[:,x][subset_mask],window_array[:,y][subset_mask], marker='.', linewidths=0.0, c=window_array[:,1][subset_mask], cmap=plt.get_cmap('hsv'))#'cet_CET_R3'
             plt.colorbar(label='Frame number')
             plt.savefig(opto_folder + '/graphs/tSNE/' + experiment_name + '/time_' + str(window_size_seconds) + 'sec_' + str(perplex) + 'per.pdf', format='pdf')
             plt.close()
@@ -1055,6 +1053,10 @@ class OptoThermoExp:
                     break
                 i += 1
             
+            #THIS IS A HARD CODED VARIABLE AND MUST BE UPDATED IF CHANGED
+            step_size = 10
+            windowpoints = int((prepost_seconds[0] + prepost_seconds[1])/step_size)
+
             behavior_hist = [[]] #behavior_hist structure is non-categorized, then categories, mosquitoes, windows indicated by 0, 1
             [behavior_hist.append([]) for category in category_info]
             ethogram_data = [[]] #ethogram structure is non-categorized + categories, mosquitoes, [onsets,offsets]
@@ -1068,21 +1070,20 @@ class OptoThermoExp:
                         print(t, i)
                     # print('frames ',start_frame, end_frame, stimulus_names[st])
                     for m in range(len(window_data[t])):
-                        [cat.append([]) for cat in behavior_hist]
+                        [cat.append([0]*windowpoints) for cat in behavior_hist]
                         [cat.append([[],[]]) for cat in ethogram_data]
                         last_window_cat = -1
                         for window in window_data[t][m]:
-                            if int(window[1]) < start_frame or int(window[1]) > end_frame:
+                            if int(window[1]) < start_frame or int(window[1]) >= end_frame:
                                 continue
                             for c, category in enumerate(category_info):
                                 #test if window is a member of the cluster of points in category
                                 if point_inside_polygon(float(window[x]),float(window[y]),category[2]):#[(category[2][0],category[2][1]),(category[2][2],category[2][3]),(category[2][4],category[2][5])]) 
                                     windowcats[c+1].append(window)
-                                    behavior_hist[c+1][global_m].append(1)
-                                    behavior_hist[0][global_m].append(0)
-                                    for c2 in range(len(category_info)):
-                                        if c2 != c:
-                                            behavior_hist[c2+1][global_m].append(0)
+                                    window_index = int((int(window[1])-start_frame)/frame_rate/step_size)
+                                    # print(int(window[1]), start_frame, end_frame, step_size)
+                                    # print(len(behavior_hist), len(behavior_hist[0]), len(behavior_hist[0][0]), window_index)
+                                    behavior_hist[c+1][global_m][window_index] = 1
                                     if last_window_cat != c+1:
                                         if last_window_cat != -1:
                                             ethogram_data[last_window_cat][global_m][1].append((int(window[1])-self.onsets[t][i])*velocity_step_frames/frame_rate+window_step_size/2)
@@ -1093,9 +1094,8 @@ class OptoThermoExp:
                                     break
                             else:
                                 windowcats[0].append(window)
-                                behavior_hist[0][global_m].append(1)
-                                for c2 in range(len(category_info)):
-                                    behavior_hist[c2+1][global_m].append(0)
+                                window_index = int((int(window[1])-start_frame)/step_size)
+                                behavior_hist[c+1][global_m][window_index] = 1
                                 if last_window_cat != 0:
                                     if last_window_cat != -1:
                                         ethogram_data[last_window_cat][global_m][1].append((int(window[1])-self.onsets[t][i])*velocity_step_frames/frame_rate+window_step_size/2)
@@ -1144,7 +1144,7 @@ class OptoThermoExp:
                 plt.savefig(newpath + '/onsetindex_' + str(st) + '.pdf', format='pdf') 
                 plt.close('all')
             if category_linegraph:
-                step_size = 10
+                
                 plt.figure()
                 plt.ylim(0,.5)
                 plt.xlim(-prepost_seconds[0], prepost_seconds[1])
@@ -1232,6 +1232,8 @@ class OptoThermoExp:
                 current_data = []
                 for cat in windowcats:
                     print('cat shape ',np.shape(cat))
+                    if np.shape(cat)[0] == 0:
+                        continue
                     current_data.append(cat[:,b+4])
                 plt.figure()
                 violin_parts = plt.violinplot(current_data)#,linewidth=0)
@@ -1245,6 +1247,8 @@ class OptoThermoExp:
             for i, name in zip([13,14],['walkvel','probevel']):
                 current_data = []
                 for cat in windowcats:
+                    if np.shape(cat)[0] == 0:
+                        continue
                     current_data.append(cat[:,i])
                 plt.figure()
                 violin_parts = plt.violinplot(current_data)
