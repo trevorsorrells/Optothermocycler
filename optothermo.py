@@ -310,14 +310,14 @@ class OptoThermoExp:
                         behavior_to_plot.append(np.mean(behavior_hist_array[i-step_size:i]))
                         i += step_size
                     collapsed_behavior[st].append(behavior_to_plot)
-            offsets = [-65,-20, 0, 20,65]
+            offsets = [30,20,24] #[-65,-20, 0, 20,65]
             additions = []
             for o, offset in enumerate(offsets):
                 additions.append([])
                 modoffset = round(offset*self.frame_rate/step_size)
                 plt.figure()
                 plt.ylim(0,.5)
-                plt.xlim(-prestim+120, poststim-120)
+                plt.xlim(-prestim+60, poststim-60)
                 x_axis = np.linspace(-prestim, poststim, int(n_timepoints/step_size))
                 for b, behavior in enumerate(self.behaviors):
                     behavior_to_plot = []
@@ -341,7 +341,7 @@ class OptoThermoExp:
             for o, offset in enumerate(offsets):
                 plt.figure()
                 plt.ylim(-.3,.3)
-                plt.xlim(-prestim+120, poststim-120)
+                plt.xlim(-prestim+60, poststim-60)
                 x_axis = np.linspace(-prestim, poststim, int(n_timepoints/step_size))
                 for b, behavior in enumerate(self.behaviors):
                     subtraction = np.subtract(collapsed_behavior[o+2][b],additions[o][b])
@@ -661,7 +661,6 @@ class OptoThermoExp:
                     behavior_hist[m].append(behavior_list)
             #calculate and assign velocity
             #print(self.trial_names[t])           
-            velocity_mat = loadmat(os.path.join(self.opto_folder, 'processed', self.trial_names[t], 'trx.mat'))
             # print(type(velocity_mat))
             # print(velocity_mat.keys())
             # print(type(velocity_mat['trx']))
@@ -674,21 +673,36 @@ class OptoThermoExp:
             plate_corners = [[20,20],[1066,16],[1065,690],[20,689]]
             plate_rows, plate_cols = 3,5
             wells = calculate_grid(plate_corners, plate_rows, plate_cols)
-            xys = np.empty((len(wells), len(velocity_mat['timestamps']), 2))
-            for track in velocity_mat['trx']:
-                f = track.firstframe - 1
-                for xloc, yloc in zip(track.x, track.y):
-                    for w, well in enumerate(wells):
-                        if xloc > well[0] and xloc < well[1] and yloc > well[2] and yloc < well[3]:
-                            xys[w,f,0] = xloc
-                            xys[w,f,1] = yloc
-                    f += 1
+            
+            # end_frame = max(self.behavior_data[0][self.behaviors[0]]['tEnds'])
+            # print(self.behavior_data[0][self.behaviors[0]]['tEnds'])
+            # print(end_frame)
+            xys = np.empty((len(wells), end_frame, 2))
+
+            for root, dirs, files in os.walk(self.opto_folder + '/processed'):
+                trial_dirs = natural_sort([d for d in dirs if d[:len(self.trial_names[t])] == self.trial_names[t]])
+                print(trial_dirs)
+                break            
+            #iterate through each trial chunk, adding mosquito tracks
+            for trial_chunk in trial_dirs:
+                velocity_mat = loadmat(os.path.join(self.opto_folder, 'processed', trial_chunk, 'trx.mat'))
+                for track in velocity_mat['trx']:
+                    f = track.firstframe - 1
+                    if isinstance(track.x, float):
+                        continue
+                    for xloc, yloc in zip(track.x, track.y):
+                        for w, well in enumerate(wells):
+                            if xloc > well[0] and xloc < well[1] and yloc > well[2] and yloc < well[3]:
+                                xys[w,f,0] = xloc
+                                xys[w,f,1] = yloc
+                        f += 1
             # print(xys[0,:10])
+            # print(xys[1,:10])
             #calculate velocity
-            velocities = np.empty((len(wells), len(velocity_mat['timestamps'])))
+            velocities = np.empty((len(wells), end_frame))
             velocities[:] = np.NaN
             for m in range(len(xys)):
-                for f in range(len(velocity_mat['timestamps'])):
+                for f in range(end_frame):
                     try:
                         first_frame = round(f-frame_step/2)
                         last_frame = round(f+frame_step/2)
@@ -735,6 +749,8 @@ class OptoThermoExp:
                             if last_frame > len(velocities[m]): #avoid partial frames at end of recording
                                 continue
                             denominator = gap_list[m][first_frame:last_frame].count(0) #number of frames that are not gap
+                            if denominator == 0:
+                                denominator = 1
                             current_parameters.append(np.mean(velocities[m,first_frame:last_frame])) #mean velocity over frame
                             # print(gap_list[m][first_frame:last_frame])
                             for b in range(4):
@@ -796,7 +812,7 @@ class OptoThermoExp:
                     outFile.write('\n')
             # print(output_parameters [:30])
 
-    def output_tSNE(self, window_size_seconds, perplex=30, delete=False):
+    def output_tSNE(self, window_size_seconds, perplex=30, delete=False, n_jobs=4, n_iter=1000):
         #this method reads in files with features calculated over windows and outputs the tSNE axes into the file
         window_data = []
         window_array = []
@@ -844,7 +860,7 @@ class OptoThermoExp:
         if delete == False:
             print(np.shape(window_array))
             time_start = time.time()
-            behavior_tsne = TSNE(perplexity=perplex, n_jobs=4, verbose=1).fit_transform(window_array[:,3:])
+            behavior_tsne = TSNE(perplexity=perplex, n_jobs=n_jobs, n_iter=n_iter, verbose=1).fit_transform(window_array[:,3:])
             print('t-SNE done! Time elapsed: {} seconds'.format(time.time()-time_start))
         i = 0
         for t, trial_name in zip(range(len(self.behavior_data)), self.trial_names):
