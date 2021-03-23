@@ -9,10 +9,15 @@ import math
 import os
 import re
 from random import shuffle
+import random
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.pylab as pl
+import matplotlib.cm as cm
+import matplotlib.patches as mpatches
 import matplotlib
+import colorcet as cc
+import seaborn as sns
 # from matplotlib.patches import Polygon
 
 from statistics import median
@@ -211,6 +216,9 @@ class OptoThermoExp:
                 plt.xlim(-prestim, poststim)
                 plt.ylim(ymin,len(ethogram_data[0]))
                 plt.title(stimulus_names[st])
+                plt.ylabel('Number of mosuqito', fontsize=13)
+                plt.xlabel('Time/s', fontsize=13)
+                ax.tick_params(axis='both', which='major', labelsize=13)
                 #reshape ethogram, calculate amount of probing, and sort
                 ethogram_sort = []
                 for i in range(len(ethogram_data[0])):
@@ -310,14 +318,14 @@ class OptoThermoExp:
                         behavior_to_plot.append(np.mean(behavior_hist_array[i-step_size:i]))
                         i += step_size
                     collapsed_behavior[st].append(behavior_to_plot)
-            offsets = [30,20,24] #[-65,-20, 0, 20,65]
+            offsets = [-65,-20, 0, 20,65]
             additions = []
             for o, offset in enumerate(offsets):
                 additions.append([])
                 modoffset = round(offset*self.frame_rate/step_size)
                 plt.figure()
                 plt.ylim(0,.5)
-                plt.xlim(-prestim+60, poststim-60)
+                plt.xlim(-prestim+120, poststim-120)
                 x_axis = np.linspace(-prestim, poststim, int(n_timepoints/step_size))
                 for b, behavior in enumerate(self.behaviors):
                     behavior_to_plot = []
@@ -341,7 +349,7 @@ class OptoThermoExp:
             for o, offset in enumerate(offsets):
                 plt.figure()
                 plt.ylim(-.3,.3)
-                plt.xlim(-prestim+60, poststim-60)
+                plt.xlim(-prestim+120, poststim-120)
                 x_axis = np.linspace(-prestim, poststim, int(n_timepoints/step_size))
                 for b, behavior in enumerate(self.behaviors):
                     subtraction = np.subtract(collapsed_behavior[o+2][b],additions[o][b])
@@ -661,6 +669,7 @@ class OptoThermoExp:
                     behavior_hist[m].append(behavior_list)
             #calculate and assign velocity
             #print(self.trial_names[t])           
+            velocity_mat = loadmat(os.path.join(self.opto_folder, 'processed', self.trial_names[t], 'trx.mat'))
             # print(type(velocity_mat))
             # print(velocity_mat.keys())
             # print(type(velocity_mat['trx']))
@@ -673,36 +682,21 @@ class OptoThermoExp:
             plate_corners = [[20,20],[1066,16],[1065,690],[20,689]]
             plate_rows, plate_cols = 3,5
             wells = calculate_grid(plate_corners, plate_rows, plate_cols)
-            
-            # end_frame = max(self.behavior_data[0][self.behaviors[0]]['tEnds'])
-            # print(self.behavior_data[0][self.behaviors[0]]['tEnds'])
-            # print(end_frame)
-            xys = np.empty((len(wells), end_frame, 2))
-
-            for root, dirs, files in os.walk(self.opto_folder + '/processed'):
-                trial_dirs = natural_sort([d for d in dirs if d[:len(self.trial_names[t])] == self.trial_names[t]])
-                print(trial_dirs)
-                break            
-            #iterate through each trial chunk, adding mosquito tracks
-            for trial_chunk in trial_dirs:
-                velocity_mat = loadmat(os.path.join(self.opto_folder, 'processed', trial_chunk, 'trx.mat'))
-                for track in velocity_mat['trx']:
-                    f = track.firstframe - 1
-                    if isinstance(track.x, float):
-                        continue
-                    for xloc, yloc in zip(track.x, track.y):
-                        for w, well in enumerate(wells):
-                            if xloc > well[0] and xloc < well[1] and yloc > well[2] and yloc < well[3]:
-                                xys[w,f,0] = xloc
-                                xys[w,f,1] = yloc
-                        f += 1
+            xys = np.empty((len(wells), len(velocity_mat['timestamps']), 2))
+            for track in velocity_mat['trx']:
+                f = track.firstframe - 1
+                for xloc, yloc in zip(track.x, track.y):
+                    for w, well in enumerate(wells):
+                        if xloc > well[0] and xloc < well[1] and yloc > well[2] and yloc < well[3]:
+                            xys[w,f,0] = xloc
+                            xys[w,f,1] = yloc
+                    f += 1
             # print(xys[0,:10])
-            # print(xys[1,:10])
             #calculate velocity
-            velocities = np.empty((len(wells), end_frame))
+            velocities = np.empty((len(wells), len(velocity_mat['timestamps'])))
             velocities[:] = np.NaN
             for m in range(len(xys)):
-                for f in range(end_frame):
+                for f in range(len(velocity_mat['timestamps'])):
                     try:
                         first_frame = round(f-frame_step/2)
                         last_frame = round(f+frame_step/2)
@@ -749,8 +743,6 @@ class OptoThermoExp:
                             if last_frame > len(velocities[m]): #avoid partial frames at end of recording
                                 continue
                             denominator = gap_list[m][first_frame:last_frame].count(0) #number of frames that are not gap
-                            if denominator == 0:
-                                denominator = 1
                             current_parameters.append(np.mean(velocities[m,first_frame:last_frame])) #mean velocity over frame
                             # print(gap_list[m][first_frame:last_frame])
                             for b in range(4):
@@ -812,18 +804,18 @@ class OptoThermoExp:
                     outFile.write('\n')
             # print(output_parameters [:30])
 
-    def output_tSNE(self, window_size_seconds, perplex=30, delete=False, n_jobs=4, n_iter=1000):
+    def output_tSNE(self, window_size_seconds, perplex=30, delete=False):
         #this method reads in files with features calculated over windows and outputs the tSNE axes into the file
         window_data = []
         window_array = []
-        br=False
+        br=False #break
         for t, trial_name in zip(range(len(self.behavior_data)), self.trial_names):
             window_data.append([])
             with open(self.opto_folder + '/cluster_features/'+trial_name +'_' + str(window_size_seconds) + '.txt', 'r') as inFile:
                 all_lines = inFile.readlines()
                 line1 = all_lines[0].split()
                 if br==False:
-                    cn=-1 
+                    cn=-1 #colomn number
                     end=-1
                 while line1[cn][:4] =='tSNE' and br == False: 
                     if line1[cn].split('_')[-1] == str(perplex): #test if have run tSNE with same perplexity
@@ -860,7 +852,7 @@ class OptoThermoExp:
         if delete == False:
             print(np.shape(window_array))
             time_start = time.time()
-            behavior_tsne = TSNE(perplexity=perplex, n_jobs=n_jobs, n_iter=n_iter, verbose=1).fit_transform(window_array[:,3:])
+            behavior_tsne = TSNE(perplexity=perplex, n_jobs=4, verbose=1).fit_transform(window_array[:,3:])
             print('t-SNE done! Time elapsed: {} seconds'.format(time.time()-time_start))
         i = 0
         for t, trial_name in zip(range(len(self.behavior_data)), self.trial_names):
@@ -891,9 +883,9 @@ class OptoThermoExp:
             with open(self.opto_folder + '/cluster_features/'+trial_name +'_' + str(window_size_seconds) + '.txt', 'r') as inFile:
                 all_lines = inFile.readlines()
                 line1 = all_lines[0].split()
-                cn=-1 
+                cn=-1 #colomn name
                 end=-1
-                if line1[-1][:4] != 'tSNE':
+                if line1[-1][:4] != 'tSNE': #search tSNE values from the right end
                     print('tSNE not calculated for this trial!')
                 while line1[cn][:4] =='tSNE':                        
                     if line1[cn].split('_')[-1] == str(perplex): 
@@ -922,7 +914,7 @@ class OptoThermoExp:
             for i in window_array[:,2].astype(int):              
                 cols.append(behav_cols[i])
             fig, ax = plt.subplots()            
-            ax.scatter(window_array[:,x][subset_mask],window_array[:,y][subset_mask], marker='.', linewidths=0.0, c=np.array(cols)[subset_mask])
+            ax.scatter(window_array[:,x][subset_mask],window_array[:,y][subset_mask], marker='.', s=20, linewidths=0.0, c=np.array(cols)[subset_mask])
             # plt.colorbar(label='Average velocity')
             plt.title('Dominant Behavior(perp='+line1[cn].split('_')[-1]+')')
             plt.xlabel('tSNE1')
@@ -937,6 +929,11 @@ class OptoThermoExp:
             end_y = roundup(int(ax.get_ylim()[1]))
             ax.yaxis.set_ticks(np.arange(start_y, end_y, ss))
             plt.grid(alpha=0.35, linestyle='dashed', linewidth=0.5)
+            patch=[] #set the legend
+            for i in range(1,5):    
+                patch.append(mpatches.Patch(color=behav_cols[i], label=self.behaviors[i-1][:-1]))
+            fig.legend(handles=patch,labelcolor=behav_cols[1:5], bbox_to_anchor=(0.48, 0.3, 0.5, 0.5))#plot legend to figure instead of subplot(plt.legend)
+            plt.subplots_adjust(left=0.15, right=0.8, wspace=0, hspace=0)
             plt.savefig(self.opto_folder + '/graphs/tSNE/' + experiment_name + '/dombehav_' + str(window_size_seconds) + 'sec_' + str(perplex) + 'per.pdf', format='pdf')
             plt.close()
         behavior_none_names = self.behaviors
@@ -1078,6 +1075,8 @@ class OptoThermoExp:
             ethogram_data = [[]] #ethogram structure is non-categorized + categories, mosquitoes, [onsets,offsets]
             [ethogram_data.append([]) for category in category_info] #
             global_m = 0
+            
+
             for t in range(len(self.behavior_data)):
                 for i in stim_type[t]:
                     start_frame = int(self.onsets[t][i] - prepost_seconds[0]*frame_rate/velocity_step_frames)
@@ -1110,7 +1109,9 @@ class OptoThermoExp:
                                     break
                             else:
                                 windowcats[0].append(window)
-                                window_index = int((int(window[1])-start_frame)/step_size)
+                                window_index = int((int(window[1])-start_frame)/frame_rate/step_size)
+                                # print(int(window[1]), start_frame, end_frame, step_size)
+                                # print(len(behavior_hist), len(behavior_hist[0]), len(behavior_hist[0][0]), window_index)
                                 behavior_hist[c+1][global_m][window_index] = 1
                                 if last_window_cat != 0:
                                     if last_window_cat != -1:
@@ -1132,7 +1133,10 @@ class OptoThermoExp:
                     label.set_fontsize(5)
                 plt.ylim(ymin,ymax)
                 plt.xlim(-prepost_seconds[0], prepost_seconds[1])
-                plt.title(stimulus_names[st])
+                plt.title('Individual mosquito cluster bouts', fontsize=20) #with '+stimulus_names[st]
+                plt.ylabel('Number of mosuqito', fontsize=13)
+                plt.xlabel('Time/s', fontsize=13)
+                ax.tick_params(axis='both', which='major', labelsize=13)
                 #reshape ethogram, calculate amount of category1, and sort
                 ethogram_sort = []
                 for m in range(len(ethogram_data[0])):
@@ -1159,14 +1163,15 @@ class OptoThermoExp:
                             plt.fill(np.array([onset,onset,offset,offset]),np.array([m+1,m,m,m+1]), linewidth=0, color=category_info[c][1])
                 plt.savefig(newpath + '/onsetindex_' + str(st) + '.pdf', format='pdf') 
                 plt.close('all')
-            if category_linegraph:
-                
+            if category_linegraph:              
                 plt.figure()
-                plt.ylim(0,.5)
+                plt.ylim(0,.7)
                 plt.xlim(-prepost_seconds[0], prepost_seconds[1])
                 print(-prepost_seconds[0],prepost_seconds[1])
                 x_axis = np.linspace(-prepost_seconds[0], prepost_seconds[1], int((prepost_seconds[0] + prepost_seconds[1])/step_size))
-                plt.title(stimulus_names[st])
+                plt.title('Proportion of mosquitos in each cluster', fontsize=20) #with '+stimulus_names[st])
+                plt.xlabel('Time/s')
+                plt.ylabel('Proportion of mosquitos')
                 print(len(x_axis))
                 for c in range(len(category_info)):
                     i = step_size
@@ -1176,19 +1181,26 @@ class OptoThermoExp:
                             behavior_to_plot.append(m[:len(x_axis)])
                         else:
                             behavior_to_plot.append(m)
-                        #print(m)
-                    print('\n\n')
-                    #list_to_array = np.asarray(behavior_to_plot)
                     behavior_hist_array=avgNestedLists(behavior_to_plot)
-                    # print(list_to_array)
-                    #behavior_hist_array = np.nanmean(list_to_array, 0)
-                    #print(behavior_hist_array)
                     plt.plot(x_axis, behavior_hist_array, color=category_info[c][1])
                 plt.savefig(newpath + '/prop_category_' + str(st) + '.pdf', format='pdf')
                 plt.close('all')
             
-            if timespent_graph:
-                timespent = np.zeros((len(stimulus_onsets), len(category_info)),dtype=int)
+        if timespent_graph:
+            max_windows=0
+            max_mosquitos=0
+            n_mosquitos=0
+            for st, stim_type in enumerate(stimulus_onsets):
+                for t in range(len(self.behavior_data)):
+                    if len(window_data[t])>max_mosquitos:
+                        max_mosquitos=len(window_data[t])
+            totaltime=0
+            timespent = np.zeros((len(stimulus_onsets), len(self.behavior_data), max_mosquitos, len(category_info)),dtype=int)
+            print(np.shape(timespent))
+            timespent[0,0,0,0]=1
+            print(timespent)
+            timespent_total=timespent = np.zeros((len(stimulus_onsets), len(self.behavior_data), max_mosquitos),dtype=int)
+            for st, stim_type in enumerate(stimulus_onsets):
                 for t in range(len(self.behavior_data)):
                     for i in stim_type[t]:
                         start_frame = int(self.onsets[t][i] - prepost_seconds[0]*frame_rate/velocity_step_frames)
@@ -1197,6 +1209,7 @@ class OptoThermoExp:
                             print(t, i)
                         # print('frames ',start_frame, end_frame, stimulus_names[st])
                         for m in range(len(window_data[t])):
+                            timespent_total[st,t,m]=0
                             [cat.append([]) for cat in behavior_hist]
                             [cat.append([[],[]]) for cat in ethogram_data]
                             last_window_cat = -1
@@ -1206,44 +1219,69 @@ class OptoThermoExp:
                                 for c, category in enumerate(category_info):
                                     #test if window is a member of the cluster of points in category
                                     if point_inside_polygon(float(window[x]),float(window[y]),category[2]):
-                                        timespent[st,c]+=10
-                #labels = ['none']                
-                #colors = ['#EEEEEE']
-                labels = []
-                colors = []
-                for cat in category_info:
-                    colors.append(cat[1])
-                [labels.append(cat[0]) for cat in category_info]
-                current_data = []
-                for c, category in enumerate(category_info):
-                    current_data.append(timespent[st,c]) #
-                plt.figure()
-                fig, ax = plt.subplots()    
-                # violin_parts = plt.violinplot(current_data)#,linewidth=0)
-                # for col, pc in zip(colors, violin_parts['bodies']):
-                #     pc.set_facecolor(col)
-                # bplot = plt.boxplot(current_data, sym='')
-                # for patch, color in zip(bplot['boxes'], colors):
-                #     patch.set_color(color)
-                plt.plot(labels, current_data, color=category_info[c][1])
-                plt.xlabel(labels)
-                ss=100
-                start_y = 0
-                end_y = roundup(int(ax.get_ylim()[1]))+100
-                plt.ylim(start_y, end_y)
-                #ax.yaxis.set_ticks(np.arange(start_y, end_y, ss))
-                plt.savefig(newpath + '/timespent_' + str(st) + '.pdf', format='pdf')  
+                                        print(st,t,m,c)
+                                        timespent[st,t,m,c]=0
+                            for c, category in enumerate(category_info):
+                                timespent_total[st,t,m]+=timespent[st,t,m,c]
+                                print(timespent[st,t,m,c])
+            labels = ['heat','light','comb']
+            colors = []
+            for cat in category_info:
+                colors.append(cat[1])            
+            cat_data=[]
+            for c, category in enumerate(category_info):
+                cat_data.append([])
+                for st, stim_type in enumerate(stimulus_onsets):
+                    cat_data[c].append(timespent[st,t,m,c]/timespent_total[st,t,m]*100)      
+            plt.figure()
+            fig, ax = plt.subplots()
+            width=0.15
+            x=np.arange(len(labels))
+            n=len(category_info) #number of clusters
+            rects=[]
+            gap_index=1.2 #To have a gap bewtween bars in a x label
+            for c, category in enumerate(category_info):
+                rects.append([])
+                rects[c]= ax.bar(x + gap_index*width/2*(2*c+1-n), cat_data[c], width, label=category_info[c][0],color=category_info[c][1])
+            # rects1 = ax.bar(x - 1.2*width, cat_data[0], width, label=category_info[0][0],color=category_info[0][1])
+            def autolabel(rects):
+                """Attach a text label above each bar in *rects*, displaying its height."""
+                for rect in rects:
+                    height = rect.get_height()
+                    height = round(height, 2)
+                    ax.annotate('{}'.format(height),
+                                xy=(rect.get_x() + rect.get_width() / 2, height),
+                                xytext=(0, 3),  # 3 points vertical offset
+                                textcoords="offset points",
+                                ha='center', va='bottom')
+            for c, category in enumerate(category_info):
+                autolabel(rects[c])                
+            fig.tight_layout()            
+            ax.set_title('Time spent in each cluster upon stimulus')
+            ax.set_xlabel('Stimulus Type')
+            ax.set_ylabel('Time/%')
+            ax.legend()
+            ax.set_xticks(x)
+            ax.set_xticklabels(labels)
+            start_y = 0
+            end_y = roundup(int(ax.get_ylim()[1]))*1.3
+            plt.ylim(start_y, end_y) 
+            plt.subplots_adjust(top=0.9,bottom=0.15,right=0.9,left=0.15)
+            plt.savefig(newpath + '/timespent' + '.pdf', format='pdf')
 
         if category_graphs:
             for c,cat in enumerate(windowcats):
                 windowcats[c] = np.asarray(cat).astype(np.float)
             # print(type(windowcats[0]))
             # print(np.shape(windowcats[0]))
-            labels = ['none']
-            colors = ['#EEEEEE']
+            # labels = ['none']
+            # colors = ['#EEEEEE']
+            labels = []
+            colors = []
             for cat in category_info:
                 colors.append(cat[1])
             [labels.append(cat[0]) for cat in category_info]
+            behav_name=['grooming','walking','probing','flying','none']
             for b, behavior in enumerate(behavior_none_names):
                 current_data = []
                 for cat in windowcats:
@@ -1252,41 +1290,337 @@ class OptoThermoExp:
                         continue
                     current_data.append(cat[:,b+4])
                 plt.figure()
-                violin_parts = plt.violinplot(current_data)#,linewidth=0)
+                fig, ax = plt.subplots()
+                violin_parts = plt.violinplot(current_data, showextrema=False)
                 for col, pc in zip(colors, violin_parts['bodies']):
                     pc.set_facecolor(col)
                 bplot = plt.boxplot(current_data, sym='')
                 for patch, color in zip(bplot['boxes'], colors):
-                    patch.set_color(color)
-                plt.xlabel(labels)
+                    patch.set_color(color)  
+                ax.set_title('Proportion of time '+ behav_name[b], fontsize=20)
+                plt.xlabel('Cluster', fontsize=13)
+                ax.set_xticklabels(labels)
+                plt.ylabel('Proportion', fontsize=13)
+                ax.tick_params(axis='both', which='major', labelsize=13)
                 plt.savefig(newpath + '/cats_' + behavior + '.pdf', format='pdf')        
             for i, name in zip([13,14],['walkvel','probevel']):
+                behaving_name=['walking','probing']
                 current_data = []
                 for cat in windowcats:
                     if np.shape(cat)[0] == 0:
                         continue
                     current_data.append(cat[:,i])
                 plt.figure()
-                violin_parts = plt.violinplot(current_data)
+                fig, ax = plt.subplots()
+                violin_parts = plt.violinplot(current_data, showmeans=False, showmedians=False, showextrema=False)
                 for col, pc in zip(colors, violin_parts['bodies']):
                     pc.set_facecolor(col)
                 bplot = plt.boxplot(current_data, sym='')
+                print('Sample Size is = '+ str(len(current_data[0])))
                 for patch, color in zip(bplot['boxes'], colors):
                     patch.set_color(color)
-                plt.xlabel(labels)
-                plt.savefig(newpath + '/cats_' + name + '.pdf', format='pdf')
-            
+                ax.set_title('Velocity of '+behaving_name[i-13], fontsize=20)
+                plt.xlabel('Cluster', fontsize=13)
+                ax.set_xticklabels(labels)
+                ax.set_ylim(-0.5,30)
+                plt.ylabel('Velocity/mm/s', fontsize=13)
+                ax.tick_params(axis='both', which='major', labelsize=13)
+                plt.savefig(newpath + '/cats_' + name + '.pdf', format='pdf') 
                 
-    def annotate_videos(self, project_folder, trial_name, experiment_name, window_size_seconds, stimulus_onsets, stimulus_names, prepost_seconds, category_info, ethogram=True, category_linegraph=True, category_graphs=True, category_anno=False, behavior_anno=False):        
+    def category_transition(self, experiment_name, window_size_seconds, perplex, stimulus_onsets, stimulus_names, prepost_seconds, category_info, ethogram=True, category_linegraph=True, timespent_graph=True, category_graphs=True):
+        #category info consists of [name, color, [(x1, y1), (x2, y2),(x3, y3),...]] for each cluster of interest
+        opto_folder=self.opto_folder
+        velocity_step_frames=self.velocity_step_frames
+        frame_rate=self.frame_rate
+        behavior_none_names = self.behaviors
+        behavior_none_names.append('none')
+        behavior_none_colors = self.behavior_colors
+        behavior_none_colors.append('#EEEEEE')
+        
+        newpath = opto_folder + '/graphs/tSNE/' + experiment_name +'/'
+        if not os.path.exists(newpath):
+            os.makedirs(newpath)
+        #read in feature data
+        window_data = []
+        last_frame=0
+        for t, trial_name in zip(range(len(self.behavior_data)), self.trial_names):
+            window_data.append([])
+            with open(opto_folder + '/cluster_features/'+trial_name +'_' + str(window_size_seconds) + '.txt', 'r') as inFile:
+                all_lines = inFile.readlines()
+                line1 = all_lines[0].split()
+                # x=-2
+                # y=-1
+                cn=-1 
+                end=-1
+                if line1[-1][:4] !='tSNE':
+                    print('tSNE not calculated for this trial!')
+                while line1[cn][:4] =='tSNE':                        
+                    if line1[cn].split('_')[-1] == str(perplex): 
+                        x=cn-1
+                        y=cn   
+                        end = cn-1 
+                        break
+                    cn+=-2
+                if end == -1:
+                    print('tSNE not calculated for this perplexity!')  
+                last_mosquito = -1
+                m = -1
+                for line in all_lines[1:]:
+                    line_split = line.split()
+                    if last_mosquito != int(line_split[0]):
+                        m += 1
+                        last_frame=line_split[1]
+                        window_data[t].append([])
+                        last_mosquito = int(line_split[0])
+                    window_data[t][m].append(line_split)
+        #differences between states
+        windowcats = [[]]
+        [windowcats.append([]) for category in category_info]
+        
+        #graph tSNE cluster categories onto individual mosquito ethograms
+        cluster_prob=[[],[],[]]
+        
+        for st, stim_type in enumerate(stimulus_onsets): #iterate through stimulus types
+            print('graph for stimuli ', stim_type, stimulus_names[st])
+            stimulus_on = 0
+            i=0
+            while True:
+                if len(stim_type[i]) > 0:
+                    stimulus_off = (self.offsets[0][stim_type[i][0]] - self.onsets[0][stim_type[i][0]])*velocity_step_frames/frame_rate
+                    break
+                i += 1
+            
+            #THIS IS A HARD CODED VARIABLE AND MUST BE UPDATED IF CHANGED
+            step_size = 10
+            windowpoints = int((prepost_seconds[0] + prepost_seconds[1])/step_size)
+
+            behavior_hist = [[]] #behavior_hist structure is non-categorized, then categories, mosquitoes, windows indicated by 0, 1
+            [behavior_hist.append([]) for category in category_info]
+            ethogram_data = [[]] #ethogram structure is non-categorized + categories, mosquitoes, [onsets,offsets]
+            [ethogram_data.append([]) for category in category_info] #
+            global_m = 0
+            
+            max_windows=0
+            max_mosquitos=0
+            n_mosquitos=0
+            for t in range(len(self.behavior_data)):
+                if len(window_data[t])>max_mosquitos:
+                        max_mosquitos=len(window_data[t])
+                for m in range(len(window_data[t])):
+                    if len(window_data[t][m])>max_windows:
+                        max_windows=len(window_data[t][m])
+            cluster_heirarchy = np.zeros((len(self.behavior_data), max_mosquitos, max_windows))
+            cluster_count = np.zeros((len(self.behavior_data), max_mosquitos, len(category_info)))
+            cluster_ratio = np.zeros((len(self.behavior_data), max_mosquitos, len(category_info)))
+            print(len(self.behavior_data))
+            for t in range(len(self.behavior_data)):
+                for m in range(len(window_data[0])):
+                    for w in range(max_windows):
+                        cluster_heirarchy[t][m][w]=-1
+            #print(cluster_heirarchy)
+            timespent_total=[[],[],[],[]]
+            for t in range(len(self.behavior_data)):
+                n_mosquitos+=len(window_data[t])
+                for i in stim_type[t]:
+                    start_frame = int(self.onsets[t][i] - prepost_seconds[0]*frame_rate/velocity_step_frames)
+                    end_frame = int(self.onsets[t][i] + prepost_seconds[1]*frame_rate/velocity_step_frames + 1)
+                    if t >0:
+                        print(t, i)
+                    # print('frames ',start_frame, end_frame, stimulus_names[st])
+                    #last_window_index=int((last_frame-start_frame)/frame_rate/step_size)
+                    #catinfo = np.empty((len(window_data[t]), last_window_index))
+                    
+                    for m in range(len(window_data[t])):
+                        [cat.append([0]*windowpoints) for cat in behavior_hist]
+                        [cat.append([[],[]]) for cat in ethogram_data]
+                        last_window_cat = -1
+                        window_count=0
+                        for w, window in enumerate(window_data[t][m]):
+                            if int(window[1]) < start_frame or int(window[1]) >= end_frame or int(window[1]) >=int(self.onsets[t][i] + 3600):
+                                continue
+                            for c, category in enumerate(category_info):
+                                #test if window is a member of the cluster of points in category
+                                if point_inside_polygon(float(window[x]),float(window[y]),category[2]):#[(category[2][0],category[2][1]),(category[2][2],category[2][3]),(category[2][4],category[2][5])]) 
+                                    windowcats[c+1].append(window)
+                                    window_index = int((int(window[1])-start_frame)/frame_rate/step_size)
+                                    cluster_heirarchy[t][m][w]=c+1
+                                    window_count+=1
+                                    behavior_hist[c+1][global_m][window_index] = 1
+                                    if last_window_cat != c+1:
+                                        if last_window_cat != -1:
+                                            ethogram_data[last_window_cat][global_m][1].append((int(window[1])-self.onsets[t][i])*velocity_step_frames/frame_rate+window_step_size/2)
+                                        ethogram_data[c+1][global_m][0].append((int(window[1])-self.onsets[t][i])*velocity_step_frames/frame_rate+window_step_size/2)
+                                        last_window_cat = c+1
+                                    break
+                                else:
+                                    cluster_heirarchy[t][m][w]=0
+                            else:
+                                windowcats[0].append(window)
+                                window_index = int((int(window[1])-start_frame)/frame_rate/step_size)
+                                behavior_hist[c+1][global_m][window_index] = 1
+                                if last_window_cat != 0:
+                                    if last_window_cat != -1:
+                                        ethogram_data[last_window_cat][global_m][1].append((int(window[1])-self.onsets[t][i])*velocity_step_frames/frame_rate+window_step_size/2)
+                                    ethogram_data[0][global_m][0].append((int(window[1])-self.onsets[t][i])*velocity_step_frames/frame_rate+window_step_size/2)
+                                    last_window_cat = 0
+                        total=0
+
+                        for c, category in enumerate(category_info):
+                            cluster_count[t][m][c]+=np.count_nonzero(cluster_heirarchy[t,m]-(c+1) == 0)
+                            if window_count!=0:
+                                cluster_ratio[t][m][c]=cluster_count[t][m][c]/window_count#len(window_data[t][m])
+                            else: 
+                                cluster_ratio[t][m][c]=0
+                            total+=cluster_ratio[t][m][c]
+                            timespent_total[c].append(cluster_ratio[t][m][c])
+                        ethogram_data[last_window_cat][global_m][1].append((int(window[1])-self.onsets[t][i])*velocity_step_frames/frame_rate+window_step_size/2)
+                        global_m += 1
+            
+            for c, category in enumerate(category_info):
+                print(timespent_total[c])
+            colors = []
+            labels = []
+            [labels.append(cat[0]) for cat in category_info]
+            for cat in category_info:
+                colors.append(cat[1])
+            plt.figure()
+            fig, ax = plt.subplots()
+            violin_parts = plt.violinplot(timespent_total, showmeans=False, showmedians=False, showextrema=False)
+            for col, pc in zip(colors, violin_parts['bodies']):
+                pc.set_facecolor(col)
+            bplot = plt.boxplot(timespent_total, sym='')
+            for patch, color in zip(bplot['boxes'], colors):
+                patch.set_color(color)
+            ax.set_title('Timespent with ' + stimulus_names[st], fontsize=20)
+            plt.xlabel('Cluster', fontsize=13)
+            ax.set_xticklabels(labels)
+            #ax.set_ylim(-0.5,30)
+            plt.ylabel('Proportion of time', fontsize=13)
+            ax.tick_params(axis='both', which='major', labelsize=13)
+            plt.savefig(newpath + 'timespent_' + str(st) + '.pdf', format='pdf') 
+                
+            transitions = np.zeros((len(self.behavior_data),max_mosquitos, max_windows))
+            # transitions_count = np.zeros((len(self.behavior_data),max_mosquitos,10,10))  
+            # transitions_total = np.zeros((n_mosquitos,10,10))
+            # transitions_conprob = np.zeros((len(self.behavior_data),max_mosquitos,10,10))  
+            # transitions_total_conprob = np.zeros((n_mosquitos,10,10))
+            transitions_count = np.zeros((len(self.behavior_data),max_mosquitos,6,6))  
+            transitions_total = np.zeros((n_mosquitos,6,6))
+            transitions_conprob = np.zeros((len(self.behavior_data),max_mosquitos,6,6))  
+            transitions_total_conprob = np.zeros((n_mosquitos,6,6))
+            
+            transitions_total_bias = np.zeros((6,6))
+            
+            transitions_conprob1 = np.zeros((len(self.behavior_data),max_mosquitos,10,10))  
+            transitions_total_conprob1 = np.zeros((n_mosquitos,10,10))
+            nm=0
+            for t in range(len(self.behavior_data)):
+                for m in range(len(window_data[t])):
+                    transitions[t][m] = cluster_heirarchy[t][m]*10 + (np.roll(cluster_heirarchy[t][m],-1)) #max number of cluster=10
+                    #print(transitions[t][m])
+                    for i in range(-1,5):#range(-1,9)
+                        for j in range(-1,5):
+                            n=i*10+j
+                            transitions_count[t,m,i,j]=np.count_nonzero(transitions[t][m]-n == 0)
+                            if i==j: #or i==-1 or j==-1:
+                                transitions_count[t,m,i,j]=0
+                    transitions_total[nm]=transitions_count[t,m]
+                    nm+=1
+                # transitions_count_avg=np.mean(transitions_count[t][0:len(window_data[t])],axis=0)
+                # print(transitions_count_avg)
+            nm=0
+            for t in range(len(self.behavior_data)):
+                for m in range(len(window_data[t])):
+                    no=np.zeros((11))
+                    no1=np.zeros((11))                    
+                    for i in range(-1,5):
+                        for j in range(-1,5):
+                            no[i]+=transitions_count[t,m,i,j]
+                            no1[j]+=transitions_count[t,m,i,j]
+                    for i in range(-1,5):
+                        for j in range(-1,5):
+                            transitions_conprob[t,m,i,j]=transitions_count[t,m,i,j]/no[i]
+                            transitions_conprob1[t,m,i,j]=transitions_count[t,m,i,j]/no[j]
+                            # if i==j or i==-1 or j==-1:
+                            #     transitions_conprob[t,m,i,j]='NaN'
+                            #     transitions_conprob1[t,m,i,j]='NaN'
+                    transitions_total_conprob[nm]=transitions_conprob[t,m]
+                    transitions_total_conprob1[nm]=transitions_conprob1[t,m]
+                    nm+=1
+            #transitions_total_bias=b-cluster_prob[st][c]/prob[st][c]
+            
+            print(n_mosquitos)
+            print(np.mean(transitions_total,axis=0))
+            a = np.mean(transitions_total,axis=0)
+            a= np.delete(a, 0, axis=0)
+            a= np.delete(a, 0, axis=1)
+            plt.figure()
+            fig, ax = plt.subplots()
+            plt.imshow(a,cmap='cet_fire')
+            plt.title('Transition numbers upon '+ str(stimulus_names[st]), fontsize=20)
+            plt.colorbar()
+            plt.xlabel('To', fontsize=13)
+            labels = []
+            colors = []
+            for cat in category_info:
+                colors.append(cat[1])
+            [labels.append(cat[0]) for cat in category_info]
+            labels.append('no behavior')
+            colors.append('#000000')
+            ax.set_xticks(range(0,5))
+            ax.set_xticklabels(labels, rotation=30, ha='right')
+            ax.set_yticks(range(0,5))
+            ax.set_yticklabels(labels)
+            plt.ylabel('From', fontsize=13)
+            ax.tick_params(axis='both', which='major', labelsize=13)
+            plt.tight_layout()
+            plt.subplots_adjust(left=0, right=0.95, wspace=0, hspace=0)
+            plt.savefig(newpath + '/Trans_' + str(st) + '.pdf', format='pdf',bbox_inches='tight') 
+            
+            print(np.nanmean(transitions_total_conprob,axis=0))
+            b=np.nanmean(transitions_total_conprob,axis=0)
+            b= np.delete(b, 0, axis=0)
+            b= np.delete(b, 0, axis=1)
+            plt.figure()
+            fig, ax = plt.subplots()
+            plt.imshow(b,cmap='cet_fire')
+            plt.title('Conditional probability upon '+ str(stimulus_names[st]), fontsize=20)
+            plt.colorbar()
+            plt.xlabel('To', fontsize=13)
+            ax.set_xticks(range(0,5))
+            ax.set_xticklabels(labels, rotation=30, ha='right')
+            ax.set_yticks(range(0,5))
+            ax.set_yticklabels(labels)
+            plt.ylabel('From', fontsize=13)
+            ax.tick_params(axis='both', which='major', labelsize=13)
+            plt.tight_layout()
+            plt.subplots_adjust(left=0, right=0.95, wspace=0, hspace=0)
+            plt.savefig(newpath + '/Conprob_' + str(st) + '.pdf', format='pdf',bbox_inches='tight') 
+                
+            c=np.nanmean(transitions_total_conprob1,axis=0)
+            plt.figure()
+            plt.imshow(c,cmap='cet_fire')
+            plt.title('Conditional probability1 upon '+ str(stimulus_names[st]))
+            plt.colorbar()
+            plt.savefig(newpath + '/Conprob1_' + str(st) + '.pdf', format='pdf') 
+            
+    def annotate_videos(self, project_folder, stim_indices, trial_name, experiment_name, window_size_seconds, stimulus_onsets, stimulus_names, prepost_seconds, perplex, category_info, ethogram=True, category_linegraph=True, category_graphs=True, category_anno=False, behavior_anno=False):        
         self.project_folder=project_folder
+        opto_folder=project_folder
         #read in xy locations
         self.trial_name=trial_name
+        velocity_step_frames=self.velocity_step_frames
+        frame_rate=self.frame_rate
         velocity_mat = loadmat(os.path.join(self.opto_folder, 'processed', self.trial_name, 'trx.mat'))
         #first assign xy values to wells
         plate_corners = [[20,20],[1066,16],[1065,690],[20,689]]
         plate_rows, plate_cols = 3,5
         wells = calculate_grid(plate_corners, plate_rows, plate_cols)
-        xys = np.empty((len(wells), len(velocity_mat['timestamps']), 2))
+        xys = np.empty((len(wells), len(velocity_mat['timestamps']), 4))
+        for w in range(len(wells)):
+            for f in range(len(velocity_mat['timestamps'])):
+                for d in range(4):
+                    xys[w,f,d]=-5000
         for track in velocity_mat['trx']: #get locations of each mosquito
             f = track.firstframe - 1
             for xloc, yloc in zip(track.x, track.y):
@@ -1294,37 +1628,107 @@ class OptoThermoExp:
                     if xloc > well[0] and xloc < well[1] and yloc > well[2] and yloc < well[3]:
                         xys[w,f,0] = xloc
                         xys[w,f,1] = yloc
-                f += 1                
+                f += 1
+        window_data = []
+        for t, trial_name in zip(range(len(self.behavior_data)), self.trial_names):
+            window_data.append([])
+            with open(opto_folder + '/cluster_features/'+trial_name +'_' + str(window_size_seconds) + '.txt', 'r') as inFile:
+                all_lines = inFile.readlines()
+                line1 = all_lines[0].split()
+                # x=-2
+                # y=-1
+                cn=-1 
+                end=-1
+                if line1[-1][:4] !='tSNE':
+                    print('tSNE not calculated for this trial!')
+                while line1[cn][:4] =='tSNE':                        
+                    if line1[cn].split('_')[-1] == str(perplex): 
+                        x=cn-1
+                        y=cn   
+                        end = cn-1 
+                        break
+                    cn+=-2
+                if end == -1:
+                    print('tSNE not calculated for this perplexity!')  
+                last_mosquito = -1
+                m = -1
+                for line in all_lines[1:]:
+                    line_split = line.split()
+                    if last_mosquito != int(line_split[0]):
+                        m += 1
+                        window_data[t].append([])
+                        last_mosquito = int(line_split[0])
+                    window_data[t][m].append(line_split)
+        for st, stim_type in enumerate(stimulus_onsets): #iterate through stimulus types
+            print('graph for stimuli ', stim_type, stimulus_names[st])
+            stimulus_on = 0
+            i=0
+            while True:
+                if len(stim_type[i]) > 0:
+                    stimulus_off = (self.offsets[0][stim_type[i][0]] - self.onsets[0][stim_type[i][0]])*velocity_step_frames/frame_rate
+                    break
+                i += 1
+            #THIS IS A HARD CODED VARIABLE AND MUST BE UPDATED IF CHANGED
+            step_size = 10
+            windowpoints = int((prepost_seconds[0] + prepost_seconds[1])/step_size)
+
+            behavior_hist = [[]] #behavior_hist structure is non-categorized, then categories, mosquitoes, windows indicated by 0, 1
+            [behavior_hist.append([]) for category in category_info]
+            ethogram_data = [[]] #ethogram structure is non-categorized + categories, mosquitoes, [onsets,offsets]
+            [ethogram_data.append([]) for category in category_info] #
+            global_m = 0
+            for t in range(len(self.behavior_data)):
+                for i in stim_type[t]:
+                    start_frame = int(self.onsets[t][i] - prepost_seconds[0]*frame_rate/velocity_step_frames)
+                    end_frame = int(self.onsets[t][i] + prepost_seconds[1]*frame_rate/velocity_step_frames + 1)
+                    if t >0:
+                        print(t, i)
+                    # print('frames ',start_frame, end_frame, stimulus_names[st])
+                    for m in range(len(window_data[t])):
+                        for window in window_data[t][m]:
+                            if int(window[1]) < start_frame or int(window[1]) >= end_frame:
+                                continue
+                            f0=int(window[1])
+                            f=f0
+                            while f<f0+300:
+                                xys[m,f,2] = float(window[x]) #tSNE values
+                                xys[m,f,3] = float(window[y])
+                                f+=1
+        
         frame_size = (700,1180)
         outcommand = generateOutCommand('movie',frame_size) #trial1_annotated
         print(' '.join(outcommand))
         pipeout = sp.Popen(outcommand, stdin=sp.PIPE)#, stderr=sp.PIPE)
         #read in tSNE information here
         #This looks for videos in the project_folder/processed/trial_name
-        path=project_folder+'/processed/trial10_DP_heat'
+        path=project_folder+'/processed/trial12_DP_comb' #change the path to where your video located in 
+        newpath=path+'/output/'
         for root, dirs, files in os.walk(path):
             print(root,dirs,files)
             mp4_files = [f for f in files if f[-3:] == 'mp4' and f[:5] == 'movie']
             mp4_files = sorted(mp4_files)
             print(mp4_files)
             #find the mp4_files that correspond to the trial you are annotating
-            for i in range(len(mp4_files)):
+            for i0 in range(len(mp4_files)):
                 # if i > 0: 
                 #     break
-                t1 = time.time()
-                incommand = [ 'ffmpeg',
-                        '-i', os.path.join(project_folder,'processed',trial_name, mp4_files[i]),
-                        '-f', 'image2pipe',
-                        '-pix_fmt', 'gray',
-                        '-vcodec', 'rawvideo', '-'] 
-                pipein = sp.Popen(incommand, stdout = sp.PIPE, bufsize=10**8)
+                # t1 = time.time()
+                # incommand = [ 'ffmpeg',
+                #         '-vsframes', str(f0),     
+                #         '-i', os.path.join(project_folder,'processed',trial_name, mp4_files[i0]),
+                #         '-f', 'image2pipe',
+                #         '-pix_fmt', 'gray',
+                #         '-vcodec', 'rawvideo', '-'] 
+                # pipein = sp.Popen(incommand, stdout = sp.PIPE, bufsize=10**8)
                 #save behavior info to each frame
-                current_behavior = np.empty((len(wells), len(velocity_mat['timestamps'])), dtype=str)
+                current_behavior1 = np.empty((len(wells), len(velocity_mat['timestamps'])), dtype=int)
+                current_behavior2 = np.empty((len(wells), len(velocity_mat['timestamps'])), dtype='U5')#unicode(string) shorter than length of 5
                 for t in range(len(self.behavior_data)):
                     allStarts = [item for sublist in self.behavior_data[t][self.behaviors[0]]['tStarts'] for item in sublist]
                     start_frame = min(allStarts)
                     allEnds = [item for sublist in self.behavior_data[t][self.behaviors[0]]['tEnds'] for item in sublist]
                     end_frame = max(allEnds)
+                    
                     for m in range(len(self.behavior_data[t][self.behaviors[0]]['t0s'])):
                         for b, behavior_name in enumerate(self.behaviors):        
                             temp_onsets = [x for x in self.behavior_data[t][behavior_name]['t0s'][m] if  x >= start_frame and x < end_frame]
@@ -1332,11 +1736,30 @@ class OptoThermoExp:
                             behavior_onsets, behavior_offsets = fixBehaviorRange(sorted(temp_onsets), sorted(temp_offsets), start_frame, end_frame)
                             for j in range(len(behavior_onsets)):
                                 for w in range(behavior_onsets[j],behavior_offsets[j]):
-                                    print(str(m)+'\t'+str(w))
-                                    current_behavior[m,w]=behavior_name
-                f0=18800
+                                    current_behavior1[m,w]=b
+                                    current_behavior2[m,w]=behavior_name[:-1]
+                    for m in range(len(self.behavior_data[t][self.behaviors[0]]['t0s'])): #get window frame numbers around stimulus
+                        for st, stim_type in enumerate(stim_indices): 
+                            for i in stim_type[t]:
+                                start_windows = int(self.onsets[t][i] - prepost_seconds[0]*self.frame_rate/self.velocity_step_frames)
+                                end_windows = int(self.onsets[t][i] + prepost_seconds[1]*self.frame_rate/self.velocity_step_frames + 1)
+                
+                f0=18651 #starting frame number
+                f1=int(self.onsets[t][i] + prepost_seconds[0]*self.frame_rate/self.velocity_step_frames) #ending frame number
+                # f0=19000
+                # f1=20000
+                t1 = time.time()
+                incommand = [ 'ffmpeg',
+                        #'-vsframes', str(f0),     
+                        '-i', os.path.join(project_folder,'processed',trial_name, mp4_files[i0]),
+                        '-ss', str(f0/frame_rate), #starting frame number to extract frames 
+                        '-f', 'image2pipe',
+                        '-pix_fmt', 'gray',
+                        '-vcodec', 'rawvideo', '-'] 
+                pipein = sp.Popen(incommand, stdout = sp.PIPE, bufsize=10**8)
+                
                 f=f0
-                while f < 20000: #True:
+                while f < f1: #True:
                     raw_image = pipein.stdout.read(frame_size[0]*frame_size[1])
                     image =  np.frombuffer(raw_image, dtype='uint8')
                     if np.size(image) < frame_size[0]*frame_size[1]:
@@ -1351,21 +1774,26 @@ class OptoThermoExp:
                     fig.axes.get_yaxis().set_visible(False)
                     plt.subplots_adjust(top=0.9,bottom=0.01,right=0.98,left=0.02,hspace=0,wspace=0)
                     plt.margins(0,0)
-                    plt.title('Frame='+str(f),fontsize=10)
-                    newpath=path+'/output/'
+                    plt.title('Frame='+str(f),fontsize=10)                    
                     if not os.path.exists(newpath):
-                        os.makedirs(newpath)                                
+                        os.makedirs(newpath)                           
                     for w, well in enumerate(wells):
+                        in_cate=False
                         for c, category in enumerate(category_info):
-                            if point_inside_polygon(xys[w,f,0],xys[w,f,1],category[2]):
+                            if point_inside_polygon(xys[w,f,2],xys[w,f,3],category[2]):
                                 tSNE_category_name=category[0]
-                                break
-                            else:
-                                tSNE_category_name='None'
-                        if category_anno == True:
-                            plt.text(xys[w,f,0],xys[w,f,1],tSNE_category_name,color='red',fontsize=10)#plot clusters onto frame                       
+                                tSNE_category_color=category[1]
+                                in_cate=True
+                        if in_cate==False:
+                            tSNE_category_name='None'
+                            tSNE_category_color='#EEEEEE'
+                        if category_anno == True: #plot categories onto frame
+                            t=plt.text(xys[w,f,0],xys[w,f,1],tSNE_category_name+str(w),color=tSNE_category_color, bbox=dict(boxstyle = "square"), fontsize=10)#plot clusters onto frame
+                            t.set_bbox(dict(facecolor=tSNE_category_color, alpha=0.2, edgecolor=tSNE_category_color))
                         if behavior_anno == True: #plot behaviors onto frame
-                            plt.text(xys[w,f,0],xys[w,f,1],current_behavior[w,f],color='red',fontsize=10)
+                            behav_cols = ['#C0BA9C','#863810','#FA0F0C','#78C0A7']
+                            t=plt.text(xys[w,f,0], xys[w,f,1], current_behavior2[w,f], color=behav_cols[current_behavior1[w,f]], bbox=dict(boxstyle = "square"), fontsize=10)
+                            t.set_bbox(dict(facecolor=behav_cols[current_behavior1[w,f]], alpha=0.2, edgecolor=behav_cols[current_behavior1[w,f]]))
                     plt.savefig(newpath+'/frame%05d.png' %(f), dpi=200)#, bbox_inches='tight') #add pad_inches=0 to ged rid of white margin
                     plt.clf()
                     plt.close()
@@ -1375,7 +1803,7 @@ class OptoThermoExp:
                 os.chdir(newpath)
                 sp.call([
                     'ffmpeg', '-framerate', '30', '-start_number', str(f0), '-i', 'frame%05d.png', '-r', '30', '-pix_fmt', 'yuv420p', '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
-                    'output(18800-20000).mp4'
+                    'outputraw.mp4'
                 ])
                 # for file_name in glob.glob("*.png"): #to remove figure files after creating videos
                 #     os.remove(file_name)
